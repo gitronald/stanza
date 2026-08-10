@@ -1,0 +1,930 @@
+#!/usr/bin/env bash
+# Complete release workflow from dev branch to tagged release
+set -e
+
+# Source shared utilities
+source "$(dirname "${BASH_SOURCE[0]:-$0}")/stanza-common"
+
+
+check_git_remote_status() {
+    # Inform (verbose tier) about remote skip conditions; the push row
+    # in the output already conveys the operative behavior.
+    if ! has_remote "origin"; then
+        print_row_v remote "no origin configured (remote ops will be skipped)"
+    elif [[ "$LOCAL_ONLY" == "true" ]]; then
+        print_row_v remote "--local mode (skipping remote ops)"
+    fi
+}
+
+# Push with diagnosis and (interactively) retry. Returns 0 on success,
+# 1 on giving up. The bump commit is already local at the call site, so
+# a failure here leaves the user with a clean working tree and a
+# retry-able state. Under -y, no prompts: fail fast for CI use.
+push_with_retry() {
+    local branch="$1"
+    local max_attempts=3
+    local attempt=1
+    while [[ $attempt -le $max_attempts ]]; do
+        if git_quiet push origin "$branch"; then
+            return 0
+        fi
+        local status ahead behind
+        status=$(get_branch_status "$branch" 2>/dev/null || echo "0 0")
+        ahead=$(echo "$status" | awk '{print $1+0}')
+        behind=$(echo "$status" | awk '{print $2+0}')
+        print_warning "push to origin/$branch failed (ahead=$ahead, behind=$behind)"
+        if [[ "$behind" -gt 0 ]]; then
+            print_hint "git pull --rebase origin $branch   # then re-run, or retry below"
+        fi
+        if [[ "$YES_TO_ALL" == "true" ]]; then
+            return 1
+        fi
+        if [[ $attempt -ge $max_attempts ]]; then
+            print_warning "max retries reached"
+            return 1
+        fi
+        read -p "Retry push to origin/$branch? (y/N): " -n 1 -r
+        echo
+        [[ "$REPLY" =~ ^[Yy]$ ]] || return 1
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
+# Tag and push version.
+# Side-effect: sets RELEASE_TAG_NAME, RELEASE_TAG_PUSHED at module scope.
+git_tag_version() {
+    local version="$1"
+
+    # Check if tag already exists
+    if [ -n "$(git tag -l "$version")" ]; then
+        print_error "Tag $version already exists. Existing tags:"
+        git tag --sort=-version:refname | head -5
+        exit 1
+    fi
+    git tag "$version"
+    RELEASE_TAG_NAME="$version"
+
+    # Push to remote if not in local-only mode
+    if ! should_skip_remote; then
+        git_quiet push origin "$BASE_BRANCH" --tags
+        print_row tag "$version  pushed"
+        RELEASE_TAG_PUSHED=true
+    else
+        print_row tag "$version  (local)"
+        RELEASE_TAG_PUSHED=false
+    fi
+}
+
+# Find the package __init__.py path from pyproject.toml
+find_package_init() {
+    local pkg_dir=""
+
+    # Try packages = [{include = "..."}] from pyproject.toml
+    pkg_dir=$(grep 'packages.*include' pyproject.toml 2>/dev/null \
+        | head -1 \
+        | sed 's/.*include *= *"\([^"]*\)".*/\1/' 2>/dev/null || true)
+
+    # Fall back: use project name from pyproject.toml
+    if [[ -z "$pkg_dir" ]]; then
+        pkg_dir=$(grep '^name *=' pyproject.toml 2>/dev/null \
+            | head -1 \
+            | sed 's/.*= *"\([^"]*\)".*/\1/' 2>/dev/null || true)
+    fi
+
+    if [[ -n "$pkg_dir" && -f "$pkg_dir/__init__.py" ]]; then
+        echo "$pkg_dir/__init__.py"
+    fi
+}
+
+# Update __version__ in package __init__.py
+update_init_version() {
+    local version="$1"
+    validate_version_string "$version"
+    local init_file
+    init_file=$(find_package_init)
+
+    if [[ -z "$init_file" ]]; then
+        return 0
+    fi
+
+    # Only update if the file contains a __version__ line
+    if grep -q '^__version__ *= *"' "$init_file" 2>/dev/null; then
+        sed "s/^__version__ *= *\"[^\"]*\"/__version__ = \"$version\"/" "$init_file" > "$init_file.tmp" && mv "$init_file.tmp" "$init_file"
+        git add "$init_file"
+        if [[ $VERBOSE == "true" ]]; then
+            echo "updated $init_file to $version" >&2
+        fi
+    fi
+}
+
+# Commit version bump with proper handling of other changes
+bump_and_commit_version() {
+    local bump_type="${1:-prerelease}"
+    local specific_version="${2:-}"
+    local project_type
+    project_type=$(detect_project_type)
+
+    # Use specific version if provided, otherwise use bump type
+    local version
+    if [[ -n "$specific_version" ]]; then
+        version=$(set_version "$specific_version")
+    else
+        version=$(bump_version "$bump_type")
+    fi
+
+    case "$project_type" in
+        uv)
+            update_init_version "$version"
+            uv lock --quiet
+            git add pyproject.toml uv.lock
+            ;;
+        bash)
+            git add VERSION
+            ;;
+        latex)
+            local latex_file
+            latex_file=$(get_latex_file)
+            git add "$latex_file"
+            ;;
+    esac
+
+    # README title version (opt-in): keep an existing "v<version>" token in the
+    # H1 title synced to the version source. No-op when absent or already current.
+    # Record what happened in module-scope flags so the caller can print the
+    # readme/promote rows right after its bump row (this function commits before
+    # the caller's bump row, so printing here would mis-order the output).
+    BUMP_README_SYNCED=""
+    if set_version_in_readme "$version"; then
+        git add README.md
+        BUMP_README_SYNCED="v$version"
+        RELEASE_README_SYNCED=true
+    fi
+
+    # CHANGELOG promotion: stable releases only (skips prereleases and the
+    # post-release dev-cycle bump). An empty [Unreleased] was already rejected by
+    # check_changelog_before_release; promote_changelog promotes a populated one
+    # in place and is a no-op (returns non-zero) otherwise.
+    BUMP_CHANGELOG_PROMOTED=""
+    if [[ "$NO_CHANGELOG" != "true" && "$version" != *a* ]]; then
+        if promote_changelog "$version"; then
+            git add CHANGELOG.md
+            BUMP_CHANGELOG_PROMOTED="$version"
+            RELEASE_CHANGELOG_PROMOTED=true
+        fi
+    fi
+
+    git_quiet commit -m "version [$bump_type]: $version"
+    if ! should_skip_remote; then
+        check_uncommitted_changes
+    fi
+}
+
+# Print the readme/promote rows recorded by the most recent
+# bump_and_commit_version call. Callers invoke this right after their bump row so
+# the doc-sync rows sit between bump and commit. Always returns 0.
+print_doc_sync_rows() {
+    [[ -n "$BUMP_README_SYNCED" ]] && print_row readme "title -> $BUMP_README_SYNCED"
+    [[ -n "$BUMP_CHANGELOG_PROMOTED" ]] && print_row promote "CHANGELOG [Unreleased] -> [$BUMP_CHANGELOG_PROMOTED]"
+    return 0
+}
+
+
+# Bump version using uv and return new version
+bump_version() {
+    local bump_type="$1"
+    local old_version=$(get_current_version)
+    local project_type
+    project_type=$(detect_project_type)
+
+    case "$project_type" in
+        uv)
+            if [[ "$bump_type" == "prerelease" ]]; then
+                if [[ "$old_version" == *a* ]]; then
+                    uv version --bump alpha --frozen > /dev/null
+                else
+                    uv version --bump patch --bump alpha=0 --frozen > /dev/null
+                fi
+            elif [[ "$bump_type" == "patch" && "$old_version" == *a* ]]; then
+                uv version --bump stable --frozen > /dev/null
+            else
+                uv version --bump "$bump_type" --frozen > /dev/null
+            fi
+            ;;
+        bash)
+            local new_ver
+            new_ver=$(bump_version_string "$old_version" "$bump_type")
+            set_version_in_file "$new_ver"
+            ;;
+        latex)
+            local new_ver
+            new_ver=$(bump_latex_version_string "$old_version" "$bump_type")
+            set_version_in_latex "$new_ver"
+            ;;
+    esac
+
+    local new_version=$(get_current_version)
+    if [[ $VERBOSE == "true" ]]; then
+        echo "version update [$(get_current_branch)] : $old_version ⟶ $new_version" >&2
+    fi
+    # Return new version for caller to use
+    echo "$new_version"
+}
+
+# Set specific version using uv and return new version
+set_version() {
+    local target_version="$1"
+    local old_version=$(get_current_version)
+    local project_type
+    project_type=$(detect_project_type)
+
+    case "$project_type" in
+        uv)
+            uv version "$target_version" --frozen > /dev/null
+            ;;
+        bash)
+            validate_version_string "$target_version"
+            set_version_in_file "$target_version"
+            ;;
+        latex)
+            validate_latex_version_string "$target_version"
+            set_version_in_latex "$target_version"
+            ;;
+    esac
+
+    local new_version=$(get_current_version)
+    if [[ $VERBOSE == "true" ]]; then
+        echo "version update [$(get_current_branch)] : $old_version ⟶ $new_version" >&2
+    fi
+
+    # Return new version for caller to use
+    echo "$new_version"
+}
+
+print_branch_version() {
+    local branch="$1"
+    local project_type
+    project_type=$(detect_project_type)
+    if [[ "$project_type" == "uv" ]]; then
+        version=$(uv version)
+    else
+        version=$(get_current_version)
+    fi
+    printf '%b\n' "${PURPLE}[$branch]${NC} $version"
+}
+
+# Default values (VERBOSE/VERBOSITY/JSON_OUTPUT may already be set by bin/stanza)
+BUMP_TYPE=""
+PHASE="full"          # full | pr | merge
+PR_NOTE=""
+MERGE_PR_NUMBER=""
+HELP=false
+LOCAL_ONLY=false
+YES_TO_ALL=false
+NO_DEV_PRERELEASE=false
+NO_CHANGELOG=false
+# Release-outcome accumulators, OR'd across every bump in this run and emitted in
+# the JSON doc: whether a README title token was synced and whether a CHANGELOG
+# [Unreleased] section was promoted at any point during the release. They are
+# per-invocation: in the two-phase pr/merge flow the changelog is promoted (and
+# reported true) by the pr run, while the separate merge run re-derives nothing
+# and reports changelog_promoted=false.
+RELEASE_README_SYNCED=false
+RELEASE_CHANGELOG_PROMOTED=false
+VERBOSE="${VERBOSE:-false}"
+PR_URL=""
+
+# Detect a leading phase token (pr|merge) before the bump-type parser.
+# Phases let the workflow run in two stages: open the PR, pause for review,
+# then merge. Everything after the phase token parses exactly as before.
+case "${1:-}" in
+    pr)    PHASE="pr";    shift ;;
+    merge) PHASE="merge"; shift ;;
+esac
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        patch|minor|major|pre|prerelease)
+            if [ -n "$BUMP_TYPE" ]; then
+                print_error "Multiple bump types specified"
+                exit 1
+            fi
+            if [[ "$1" == "pre" ]]; then
+                BUMP_TYPE="prerelease"
+            else
+                BUMP_TYPE="$1"
+            fi
+            shift
+            ;;
+        [0-9]*)
+            # A bare number is the optional PR pin for the merge phase.
+            if [[ "$PHASE" == "merge" && "$1" =~ ^[0-9]+$ ]]; then
+                MERGE_PR_NUMBER="$1"
+                shift
+            else
+                print_error "Unknown option '$1'"
+                echo "Use -h or --help for usage information"
+                exit 1
+            fi
+            ;;
+        --pr-note)
+            if [[ -z "${2:-}" ]]; then
+                print_error "--pr-note requires a value"
+                exit 1
+            fi
+            PR_NOTE="$2"
+            shift 2
+            ;;
+        --pr-note=*)
+            PR_NOTE="${1#*=}"
+            shift
+            ;;
+        --local)
+            LOCAL_ONLY=true
+            shift
+            ;;
+        --no-dev-cycle)
+            NO_DEV_PRERELEASE=true
+            shift
+            ;;
+        --no-changelog)
+            NO_CHANGELOG=true
+            shift
+            ;;
+        -y|--yes)
+            YES_TO_ALL=true
+            shift
+            ;;
+        -q|--quiet)
+            QUIET_REQUESTED=true
+            VERBOSITY=0
+            shift
+            ;;
+        --verbose)
+            VERBOSE_REQUESTED=true
+            if [[ $VERBOSITY -lt 2 ]]; then VERBOSITY=2; else VERBOSITY=$((VERBOSITY + 1)); fi
+            VERBOSE=true
+            shift
+            ;;
+        -v*)
+            if [[ "$1" =~ ^-v+$ ]]; then
+                VERBOSE_REQUESTED=true
+                vcount=$((${#1} - 1))
+                target=$((vcount + 1))
+                [[ $VERBOSITY -lt $target ]] && VERBOSITY=$target
+                VERBOSE=true
+                shift
+            else
+                print_error "Unknown option '$1'"
+                echo "Use -h or --help for usage information"
+                exit 1
+            fi
+            ;;
+        --json)
+            JSON_OUTPUT=true
+            shift
+            ;;
+        --no-color)
+            NO_COLOR_OVERRIDE=true
+            shift
+            ;;
+        -h|--help)
+            HELP=true
+            shift
+            ;;
+        *)
+            print_error "Unknown option '$1'"
+            echo "Use -h or --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+# Re-sync VERBOSE with VERBOSITY (handles the case where bin/stanza set
+# VERBOSITY but we did not see -v locally).
+if [[ "$VERBOSITY" -ge 3 ]]; then
+    VERBOSE=true
+fi
+
+# Validate after both bin/stanza-level and subcommand-level flag parsing.
+check_verbosity_exclusion
+
+print_release_help() {
+    cat <<'EOF'
+Create a release: bump the version and ship it through dev -> main.
+
+Usage:
+  stanza release <BUMP_TYPE>          Full release (bump, PR, merge, tag, new cycle)
+  stanza release pr <BUMP_TYPE>       Phase 1: bump on dev, open PR, then stop
+  stanza release merge [PR_NUMBER]    Phase 2: merge the open PR, tag, open new cycle
+
+Arguments:
+  <BUMP_TYPE>  Type of version bump:
+                 patch         Promote alpha to stable, or bump patch (0.1.1a0 -> 0.1.1)
+                 minor         Bump minor, zero patch (0.1.1 -> 0.2.0)
+                 major         Bump major, zero minor and patch (0.2.0 -> 1.0.0)
+                 prerelease    Bump to next alpha (0.1.0 -> 0.1.1a0); no PR  [alias: pre]
+  [PR_NUMBER]  (merge only) pin a specific open PR when more than one exists
+
+Phases let an agent pause for review between opening and merging a PR.
+'prerelease' opens no PR, so phase subcommands (pr, merge) do not apply to it.
+
+Options:
+      --pr-note <TEXT>     Append a note to the PR body (full and pr phases)
+      --no-dev-cycle  Skip the post-release dev cycle: no merge-back to
+                           dev and no next prerelease bump (full and merge phases)
+      --no-changelog       Skip CHANGELOG [Unreleased] promotion and its
+                           empty-section pre-flight check
+  -y, --yes                Auto-confirm all prompts (useful for CI/CD)
+      --local              Local-only mode (skip all remote operations)
+  -q, --quiet              Reduce output to one-line outcomes (errors still print)
+  -v, --verbose            Show step internals (-vv dumps every git/gh command)
+      --json               Emit a single JSON document on stdout
+      --no-color           Disable ANSI color (also honors NO_COLOR env)
+  -h, --help               Print help
+
+Examples:
+  stanza release prerelease                Bump to next prerelease (no PR)
+  stanza release pre                       Same as 'prerelease' (alias)
+  stanza release patch                     Full release; PR dev -> main, merge, tag
+  stanza release patch -y                  Non-interactive full release
+  stanza release pr minor -y               Phase 1: bump + open PR, then stop for review
+  stanza release merge -y                  Phase 2: merge the open PR, tag, new cycle
+  stanza release pr patch --pr-note "..."  Open PR with a note in its body
+  stanza release patch -y --no-dev-cycle  Release, but leave dev untouched
+  stanza release patch -y --no-changelog  Release without promoting CHANGELOG
+  stanza --json release patch -y           Machine-readable output
+EOF
+}
+
+# Show help if requested.
+if [[ $HELP == true ]]; then
+    print_release_help
+    exit 0
+fi
+
+# Phase-aware argument validation.
+if [[ "$PHASE" != "full" && "$BUMP_TYPE" == "prerelease" ]]; then
+    print_error "prereleases open no PR; phase subcommands do not apply" \
+        "use 'stanza release prerelease' (no phase)"
+    exit 1
+fi
+if [[ "$PHASE" == "merge" ]]; then
+    # merge re-derives the version from the open PR; a bump type is meaningless.
+    if [[ -n "$BUMP_TYPE" ]]; then
+        print_error "merge takes no bump type; the version is derived from the open PR" \
+            "run 'stanza release merge' (optionally with a PR number)"
+        exit 1
+    fi
+elif [[ -z "$BUMP_TYPE" ]]; then
+    if [[ "$PHASE" == "pr" ]]; then
+        print_error "missing bump type for 'release pr'" \
+            "specify one: stanza release pr patch|minor|major"
+        exit 1
+    fi
+    # Bare 'stanza release' (full phase, no type): print help, as before.
+    print_release_help
+    exit 0
+fi
+
+# Deferred initialization (after help check, so --help works without a version file)
+CURRENT_VERSION=$(get_current_version) || exit 1
+CURRENT_BRANCH=$(get_current_branch)
+BASE_BRANCH=$(get_base_branch)
+PROJECT_TYPE_DETECTED=$(detect_project_type)
+
+# Command label for the header and error hints (reflects the active phase).
+case "$PHASE" in
+    pr)    CMD_LABEL="pr $BUMP_TYPE" ;;
+    merge) CMD_LABEL="merge" ;;
+    *)     CMD_LABEL="$BUMP_TYPE" ;;
+esac
+
+# Header banner (skipped when --json or --quiet are set; helpers handle gating)
+if [[ "$BUMP_TYPE" == "prerelease" ]]; then
+    HEADER_CONTEXT="$CURRENT_BRANCH, $PROJECT_TYPE_DETECTED"
+else
+    HEADER_CONTEXT="$CURRENT_BRANCH -> $BASE_BRANCH, $PROJECT_TYPE_DETECTED"
+fi
+[[ "$LOCAL_ONLY" == "true" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, local"
+print_header "release $CMD_LABEL" "$HEADER_CONTEXT"
+print_row_v checks "branch=$CURRENT_BRANCH, project=$PROJECT_TYPE_DETECTED, phase=$PHASE, yes=$YES_TO_ALL"
+
+# ------------------------------------------------------------------------------
+
+# Handle prerelease workflow
+handle_prerelease_workflow() {
+    if [[ "$PROJECT_TYPE_DETECTED" == "latex" ]]; then
+        print_error "LaTeX projects don't support prerelease bumps" \
+            "use 'stanza release patch|minor|major' instead"
+        exit 1
+    fi
+    check_not_protected_branch
+    check_uncommitted_changes
+    if ! should_skip_remote; then
+        check_branch_up_to_date "$CURRENT_BRANCH"
+    fi
+    confirm_step "Create [$BUMP_TYPE] version commit on current branch"
+
+    local old_version="$CURRENT_VERSION"
+    bump_and_commit_version "$BUMP_TYPE"
+    local new_version
+    new_version=$(get_current_version)
+    local sha
+    sha=$(git rev-parse --short HEAD)
+    print_row bump "$old_version -> $new_version"
+    print_doc_sync_rows
+    print_row commit "$sha  \"version [$BUMP_TYPE]: $new_version\""
+
+    local pushed="false"
+    if ! should_skip_remote; then
+        if push_with_retry "$CURRENT_BRANCH"; then
+            print_row push "origin/$CURRENT_BRANCH"
+            pushed="true"
+        else
+            print_row push "failed (commit kept locally — push manually with: git push origin $CURRENT_BRANCH)"
+        fi
+    elif [[ "$LOCAL_ONLY" == "true" ]]; then
+        print_row push "skipped (--local)"
+    else
+        print_row push "skipped (no remote)"
+    fi
+
+    json_set command "release"
+    json_set bump_type "$BUMP_TYPE"
+    json_set project_type "$PROJECT_TYPE_DETECTED"
+    json_set from_version "$old_version"
+    json_set to_version "$new_version"
+    json_set branch "$CURRENT_BRANCH"
+    json_set commit "$sha"
+    json_set_raw pushed "$pushed"
+    json_set_raw readme_synced "$RELEASE_README_SYNCED"
+    json_set_raw changelog_promoted "$RELEASE_CHANGELOG_PROMOTED"
+    json_emit
+
+    if [[ "$VERBOSITY" -le 0 ]]; then
+        # Quiet mode: just the new version on stdout
+        [[ "$JSON_OUTPUT" != "true" ]] && echo "$new_version"
+    else
+        print_done "$new_version on $CURRENT_BRANCH"
+    fi
+    exit 0
+}
+
+# Pre-flight for a stable release: refuse to ship with an empty CHANGELOG
+# "[Unreleased]" section. Runs before any version mutation so an abort leaves
+# the working tree untouched. A missing CHANGELOG.md, a changelog with no
+# [Unreleased] heading, or --no-changelog all pass through silently.
+check_changelog_before_release() {
+    [[ "$NO_CHANGELOG" == "true" ]] && return 0
+    if [[ "$(changelog_unreleased_status)" == "empty" ]]; then
+        print_error "CHANGELOG.md [Unreleased] is empty; add entries before releasing" \
+            "fill ## [Unreleased], or pass --no-changelog to skip changelog promotion"
+        exit 1
+    fi
+}
+
+# Step 1: Create version bump commit on dev branch.
+# Side-effect: sets RELEASE_FROM_VERSION, RELEASE_TO_VERSION, RELEASE_COMMIT_SHA,
+# RELEASE_PUSHED at module scope for downstream JSON emission.
+create_version_bump_on_dev() {
+    # Checks
+    require_branch "dev"
+    check_uncommitted_changes
+    if ! should_skip_remote; then
+        check_branch_up_to_date "dev"
+    fi
+    check_changelog_before_release
+
+    # Bump and commit
+    RELEASE_FROM_VERSION="$CURRENT_VERSION"
+    confirm_step "1: Create version bump [$BUMP_TYPE] commit on dev branch"
+    bump_and_commit_version "$BUMP_TYPE"
+    RELEASE_TO_VERSION=$(get_current_version)
+    RELEASE_COMMIT_SHA=$(git rev-parse --short HEAD)
+    print_row bump "$RELEASE_FROM_VERSION -> $RELEASE_TO_VERSION  on dev"
+    print_doc_sync_rows
+    print_row commit "$RELEASE_COMMIT_SHA  \"version [$BUMP_TYPE]: $RELEASE_TO_VERSION\""
+
+    RELEASE_PUSHED=false
+    if ! should_skip_remote; then
+        git_quiet push origin dev
+        print_row push "origin/dev"
+        RELEASE_PUSHED=true
+    elif [[ "$LOCAL_ONLY" == "true" ]]; then
+        print_row push "skipped (--local)"
+    else
+        print_row push "skipped (no remote)"
+    fi
+}
+
+# Number of the most-recent open dev->base PR, or empty if none.
+# The `// empty` keeps a missing PR as the empty string (not the literal
+# "null"), so callers can test it with [[ -z ... ]].
+gh_get_last_open_pr_number() {
+    gh pr list --base "$BASE_BRANCH" --head dev --state open --json number --jq '.[0].number // empty'
+}
+
+# Step 2a: Open a PR from dev into base (no merge — the create half of the
+# old gh_create_and_merge_pr). Sets RELEASE_PR_NUMBER, RELEASE_PR_URL.
+gh_create_pr() {
+    local version_tag="$1"
+    gh_quiet pr create --base "$BASE_BRANCH" --head dev --title "$version_tag" --fill --assignee @me
+
+    # Get most recent open PR number
+    RELEASE_PR_NUMBER=$(gh_get_last_open_pr_number)
+    if [[ -z "$RELEASE_PR_NUMBER" ]]; then
+        print_error "No open pull requests from dev to $BASE_BRANCH found"
+        exit 1
+    fi
+    RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url')
+    PR_URL="$RELEASE_PR_URL"  # back-compat for any callers
+
+    # Append the note to the PR body, if one was given. --fill already set a
+    # commit-derived body; we read it back and append rather than pass --body
+    # (which would conflict with --fill). Tolerate gh hiccups so a note failure
+    # never aborts the release (set -e).
+    if [[ -n "$PR_NOTE" && -n "$RELEASE_PR_NUMBER" ]]; then
+        local body
+        body=$(gh pr view "$RELEASE_PR_NUMBER" --json body --jq '.body' 2>/dev/null || true)
+        gh_quiet pr edit "$RELEASE_PR_NUMBER" --body "${body}"$'\n\n'"${PR_NOTE}" || true
+    fi
+
+    print_row pr "#$RELEASE_PR_NUMBER $RELEASE_PR_URL"
+    [[ -n "$PR_NOTE" ]] && print_row_v pr "note: $PR_NOTE"
+    # Verbose PR view here (before the merge confirm) so the full flow keeps
+    # today's row -> view -> confirm -> merge ordering.
+    if [[ $VERBOSE == "true" ]]; then
+        gh_quiet pr view "$RELEASE_PR_NUMBER"
+    fi
+}
+
+# Step 2b: Merge the open dev->base PR (the merge half of the old function).
+# With an explicit PR number (full flow passes the one it just created), that
+# PR is merged directly. With no argument (merge phase) the single open PR is
+# resolved, erroring if there are none or more than one. Either way, refuses to
+# merge when dev has advanced past the PR head (would ship unreviewed commits).
+# Sets RELEASE_PR_NUMBER, RELEASE_PR_URL.
+gh_merge_pr() {
+    local pr_number="${1:-}"
+    if [[ -z "$pr_number" ]]; then
+        local open_count
+        open_count=$(gh pr list --base "$BASE_BRANCH" --head dev --state open --json number --jq 'length' 2>/dev/null || echo 0)
+        if [[ "$open_count" -gt 1 ]]; then
+            print_error "Multiple open dev->$BASE_BRANCH PRs ($open_count); target is ambiguous" \
+                "pin one: stanza release merge <pr-number>"
+            exit 1
+        fi
+        pr_number=$(gh_get_last_open_pr_number)
+    fi
+    if [[ -z "$pr_number" ]]; then
+        print_error "No open PR from dev to $BASE_BRANCH to merge" \
+            "run 'stanza release pr <type>' first"
+        exit 1
+    fi
+    RELEASE_PR_NUMBER="$pr_number"
+
+    # Refuse to merge if dev moved past the reviewed PR head.
+    local pr_head dev_head
+    pr_head=$(gh pr view "$RELEASE_PR_NUMBER" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)
+    dev_head=$(git rev-parse dev 2>/dev/null || true)
+    if [[ -n "$pr_head" && -n "$dev_head" && "$pr_head" != "$dev_head" ]]; then
+        print_error "dev has advanced past PR #$RELEASE_PR_NUMBER head; merge would ship unreviewed commits" \
+            "re-run 'stanza release pr <type>' to refresh the PR"
+        exit 1
+    fi
+
+    RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
+    PR_URL="$RELEASE_PR_URL"  # back-compat for any callers
+    confirm_step "2: Merge PR #$RELEASE_PR_NUMBER from dev into $BASE_BRANCH"
+    gh_quiet pr merge "$RELEASE_PR_NUMBER" --merge
+    git_quiet checkout "$BASE_BRANCH"
+    git_quiet pull origin "$BASE_BRANCH"
+    print_row merge "#$RELEASE_PR_NUMBER merged into $BASE_BRANCH"
+}
+
+# Step 2b: Merge dev into main locally (local workflow).
+# Tagging is handled by the caller via git_tag_version, after this returns.
+git_merge_dev_into_main() {
+    local version_tag="$1"
+    confirm_step "2: Merge dev into $BASE_BRANCH"
+    git_quiet checkout "$BASE_BRANCH"
+    git_quiet merge dev -m "$version_tag"
+    print_row merge "dev into $BASE_BRANCH (local)"
+}
+
+# Step 3: Create new prerelease version cycle on dev
+create_new_prerelease_cycle() {
+    confirm_step "3: Create a new version cycle and commit a new prerelease on dev"
+    git_quiet checkout dev
+
+    # Merge base branch into dev to keep histories in sync (includes merge commit from PR)
+    if ! should_skip_remote; then
+        git_quiet pull origin dev  # Ensure dev is up to date
+        git_quiet merge "$BASE_BRANCH" --no-ff --no-edit  # Force merge commit (keeps graph clean)
+    fi
+
+    # LaTeX projects don't have a prerelease concept; skip the version bump
+    # but still merge main back so dev stays in sync.
+    if [[ "$PROJECT_TYPE_DETECTED" == "latex" ]]; then
+        if ! should_skip_remote; then
+            git_quiet push origin dev
+            print_row cycle "merged $BASE_BRANCH back, pushed (latex: no prerelease bump)"
+        else
+            print_row cycle "merged $BASE_BRANCH back (latex: no prerelease bump)"
+        fi
+        return
+    fi
+
+    bump_and_commit_version "prerelease"
+    print_doc_sync_rows
+    if ! should_skip_remote; then
+        git_quiet push origin dev
+        print_row cycle "$(get_current_version) on dev (merged $BASE_BRANCH back, pushed)"
+    else
+        print_row cycle "$(get_current_version) on dev (merged $BASE_BRANCH back, local)"
+    fi
+}
+
+# Step 3 (gated): run the new prerelease cycle unless --no-dev-cycle was
+# given. When skipped, dev is left untouched (no merge-back, no bump) and the
+# caller stays on the base branch; NEW_DEV_VERSION is cleared so JSON emits null.
+run_prerelease_cycle_or_skip() {
+    if [[ "$NO_DEV_PRERELEASE" == "true" ]]; then
+        print_row cycle "skipped (--no-dev-cycle); now on $BASE_BRANCH, dev unchanged"
+        print_hint "dev was not advanced; merge $BASE_BRANCH back and bump when ready"
+        NEW_DEV_VERSION=""
+    else
+        create_new_prerelease_cycle
+        NEW_DEV_VERSION=$(get_current_version)
+    fi
+}
+
+# Append the "pr" JSON field: an object with number/url (and note, when a
+# --pr-note was given), or null when no PR was opened (e.g. --local). The note
+# key is present only when set, so the unchanged full-release path emits the
+# same pr object as before.
+json_set_pr_field() {
+    if [[ -n "$RELEASE_PR_NUMBER" ]]; then
+        local obj="{\"number\":$RELEASE_PR_NUMBER,\"url\":\"$(json_escape "$RELEASE_PR_URL")\""
+        if [[ -n "$PR_NOTE" ]]; then
+            obj="${obj},\"note\":\"$(json_escape "$PR_NOTE")\""
+        fi
+        obj="${obj}}"
+        json_set_raw pr "$obj"
+    else
+        json_set_raw pr "null"
+    fi
+}
+
+# Prerequisites checks
+check_required_commands
+check_git_remote_status
+
+# For prerelease: ensure not on protected branch
+if [[ "$BUMP_TYPE" == "prerelease" ]]; then
+    handle_prerelease_workflow
+fi
+
+# For non-prerelease releases, check GitHub authentication
+if [[ "$BUMP_TYPE" != "prerelease" ]] && ! should_skip_remote; then
+    if ! gh auth status &>/dev/null; then
+        print_error "GitHub CLI is not authenticated"
+        echo ""
+        echo "Please authenticate with GitHub:"
+        echo "  gh auth login"
+        echo ""
+        echo "Or run in local-only mode:"
+        echo "  stanza release $CMD_LABEL --local"
+        exit 1
+    fi
+fi
+
+RELEASE_PR_NUMBER=""
+RELEASE_PR_URL=""
+
+case "$PHASE" in
+    full)
+        # Unchanged one-shot flow: bump on dev, open+merge the PR (or merge
+        # locally), tag, then open the next prerelease cycle.
+        create_version_bump_on_dev
+        version_tag="v$(get_current_version)"
+        RELEASE_VERSION=$(get_current_version)
+        if ! should_skip_remote; then
+            gh_create_pr "$version_tag"
+            gh_merge_pr "$RELEASE_PR_NUMBER"
+        else
+            git_merge_dev_into_main "$version_tag"
+        fi
+        git_tag_version "$version_tag"
+        run_prerelease_cycle_or_skip
+
+        # JSON output (stdout, suppresses human banner via JSON_OUTPUT gating)
+        json_set command "release"
+        json_set bump_type "$BUMP_TYPE"
+        json_set project_type "$PROJECT_TYPE_DETECTED"
+        json_set from_version "$RELEASE_FROM_VERSION"
+        json_set to_version "$RELEASE_TO_VERSION"
+        json_set branch_from "dev"
+        json_set branch_to "$BASE_BRANCH"
+        json_set commit "$RELEASE_COMMIT_SHA"
+        json_set_raw pushed "$RELEASE_PUSHED"
+        json_set_pr_field
+        json_set_raw tag "{\"name\":\"$(json_escape "$RELEASE_TAG_NAME")\",\"pushed\":$RELEASE_TAG_PUSHED}"
+        json_set_or_null next_cycle_version "$NEW_DEV_VERSION"
+        json_set_raw readme_synced "$RELEASE_README_SYNCED"
+        json_set_raw changelog_promoted "$RELEASE_CHANGELOG_PROMOTED"
+        json_emit
+
+        if [[ "$VERBOSITY" -le 0 ]]; then
+            [[ "$JSON_OUTPUT" != "true" ]] && echo "$RELEASE_VERSION"
+        elif [[ "$NO_DEV_PRERELEASE" == "true" ]]; then
+            print_done "released $version_tag; dev prerelease cycle skipped"
+        else
+            print_done "released $version_tag; dev -> $NEW_DEV_VERSION"
+        fi
+        ;;
+
+    pr)
+        # Phase 1: bump on dev and open the PR, then stop for review.
+        [[ "$NO_DEV_PRERELEASE" == "true" ]] && \
+            print_row_v note "--no-dev-cycle has no effect on 'pr'; pass it to 'merge'"
+        create_version_bump_on_dev
+        version_tag="v$(get_current_version)"
+        RELEASE_VERSION=$(get_current_version)
+        if ! should_skip_remote; then
+            gh_create_pr "$version_tag"
+        fi
+
+        json_set command "release"
+        json_set phase "pr"
+        json_set bump_type "$BUMP_TYPE"
+        json_set project_type "$PROJECT_TYPE_DETECTED"
+        json_set from_version "$RELEASE_FROM_VERSION"
+        json_set to_version "$RELEASE_TO_VERSION"
+        json_set branch_from "dev"
+        json_set branch_to "$BASE_BRANCH"
+        json_set commit "$RELEASE_COMMIT_SHA"
+        json_set_raw pushed "$RELEASE_PUSHED"
+        json_set_pr_field
+        json_set resume "stanza release merge"
+        json_set_raw readme_synced "$RELEASE_README_SYNCED"
+        json_set_raw changelog_promoted "$RELEASE_CHANGELOG_PROMOTED"
+        json_emit
+
+        print_hint "review the PR, then: stanza release merge"
+        if [[ "$VERBOSITY" -le 0 ]]; then
+            [[ "$JSON_OUTPUT" != "true" ]] && echo "$RELEASE_VERSION"
+        else
+            print_done "$version_tag opened on dev; review, then: stanza release merge"
+        fi
+        ;;
+
+    merge)
+        # Phase 2: merge the open PR (or merge dev locally), tag, new cycle.
+        check_uncommitted_changes
+        if ! should_skip_remote; then
+            # Derive the tag from the target PR's title; fall back to current.
+            _merge_pr="${MERGE_PR_NUMBER:-$(gh_get_last_open_pr_number)}"
+            if [[ -n "$_merge_pr" ]]; then
+                version_tag=$(gh pr view "$_merge_pr" --json title --jq '.title' 2>/dev/null || true)
+            fi
+            [[ -z "${version_tag:-}" ]] && version_tag="v$(get_current_version)"
+            gh_merge_pr "$MERGE_PR_NUMBER"
+        else
+            # --local merge cannot tell whether a pr phase promoted the version;
+            # refuse to tag a prerelease (alpha) on the base branch.
+            if [[ "$(get_current_version)" == *a* ]]; then
+                print_error "refusing to tag a prerelease (alpha) on $BASE_BRANCH" \
+                    "promote first (stanza release pr patch) or run a full release"
+                exit 1
+            fi
+            version_tag="v$(get_current_version)"
+            git_merge_dev_into_main "$version_tag"
+        fi
+        git_tag_version "$version_tag"
+        run_prerelease_cycle_or_skip
+        RELEASE_VERSION="${version_tag#v}"
+
+        json_set command "release"
+        json_set phase "merge"
+        json_set project_type "$PROJECT_TYPE_DETECTED"
+        json_set branch_from "dev"
+        json_set branch_to "$BASE_BRANCH"
+        json_set_pr_field
+        json_set_raw tag "{\"name\":\"$(json_escape "$RELEASE_TAG_NAME")\",\"pushed\":$RELEASE_TAG_PUSHED}"
+        json_set_or_null next_cycle_version "$NEW_DEV_VERSION"
+        json_set_raw readme_synced "$RELEASE_README_SYNCED"
+        json_set_raw changelog_promoted "$RELEASE_CHANGELOG_PROMOTED"
+        json_emit
+
+        if [[ "$VERBOSITY" -le 0 ]]; then
+            [[ "$JSON_OUTPUT" != "true" ]] && echo "$RELEASE_VERSION"
+        elif [[ "$NO_DEV_PRERELEASE" == "true" ]]; then
+            print_done "released $version_tag; dev prerelease cycle skipped"
+        else
+            print_done "released $version_tag; dev -> $NEW_DEV_VERSION"
+        fi
+        ;;
+esac

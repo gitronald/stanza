@@ -1,0 +1,842 @@
+#!/usr/bin/env bash
+# Shared utility functions for release scripts
+# Source this file in other scripts: source "$(dirname "${BASH_SOURCE[0]:-$0}")/stanza-common"
+
+# Colors
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+PURPLE='\033[0;35m'
+BLUE='\033[0;34m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+DIM='\033[2m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# ------------------------------------------------------------------------------
+# Output verbosity and color
+#
+# VERBOSITY tiers (see plan 002):
+#   0 = quiet    - one-line outcomes only
+#   1 = default  - conversational table grammar (the headline)
+#   2 = verbose  - adds pre-check rows and step internals
+#   3 = vverbose - dumps every git/gh command (was old VERBOSE=true)
+#
+# VERBOSE (boolean) is retained as a derived flag so existing callers
+# (git_quiet, gh_quiet, scattered "if VERBOSE" checks) keep working
+# until step 2 hoists flag parsing into bin/stanza.
+VERBOSITY="${VERBOSITY:-1}"
+JSON_OUTPUT="${JSON_OUTPUT:-false}"
+NO_COLOR_OVERRIDE="${NO_COLOR_OVERRIDE:-false}"
+QUIET_REQUESTED="${QUIET_REQUESTED:-false}"
+VERBOSE_REQUESTED="${VERBOSE_REQUESTED:-false}"
+
+# Validate that --quiet and --verbose were not both requested at any level.
+# Call after subcommand argument parsing.
+check_verbosity_exclusion() {
+    if [[ "$QUIET_REQUESTED" == "true" && "$VERBOSE_REQUESTED" == "true" ]]; then
+        echo "Error: --quiet and --verbose are mutually exclusive" >&2
+        exit 1
+    fi
+}
+
+# Decide whether to emit ANSI color for a given output fd. Suppressed when:
+#   - NO_COLOR env var is set (any value, per https://no-color.org)
+#   - --no-color flag was passed (NO_COLOR_OVERRIDE=true)
+#   - the target fd is not a TTY (default fd is 1 / stdout)
+# Usage: should_use_color           # checks stdout
+#        should_use_color 2         # checks stderr (for hints, errors)
+should_use_color() {
+    local fd="${1:-1}"
+    [[ -n "${NO_COLOR:-}" ]] && return 1
+    [[ "$NO_COLOR_OVERRIDE" == "true" ]] && return 1
+    [[ ! -t "$fd" ]] && return 1
+    return 0
+}
+
+# Wrap text in color codes only when color is enabled.
+# Usage: _c "$CYAN" "text"
+_c() {
+    local code="$1"; shift
+    if should_use_color; then
+        printf "%b%s%b" "$code" "$*" "$NC"
+    else
+        printf "%s" "$*"
+    fi
+}
+
+# Width of the label column (left padding + label, then a gap). Set to the
+# longest label + 1 so every row keeps at least a one-space gap before content.
+# 8 covers all current verbs (bump, commit, push, pr, merge, tag, cycle, checks,
+# done, repo, remote, tags, readme, promote, error, warn, hint, dry-run).
+LABEL_WIDTH=8
+
+# Print the header line for a command.
+# Usage: print_header release "dev, uv"
+print_header() {
+    local cmd="$1"
+    local context="${2:-}"
+    [[ "$JSON_OUTPUT" == "true" ]] && return 0
+    [[ "$VERBOSITY" -lt 1 ]] && return 0
+    if [[ -n "$context" ]]; then
+        printf "%s  (%s)\n" "$(_c "$BOLD" "stanza $cmd")" "$context"
+    else
+        printf "%s\n" "$(_c "$BOLD" "stanza $cmd")"
+    fi
+}
+
+# Print a labelled row: "  LABEL    content".
+# Usage: print_row bump "0.6.1a0 -> 0.6.2a0"
+print_row() {
+    local label="$1"
+    local content="${2:-}"
+    [[ "$JSON_OUTPUT" == "true" ]] && return 0
+    [[ "$VERBOSITY" -lt 1 ]] && return 0
+    printf "  %b%-${LABEL_WIDTH}s%b%s\n" \
+        "$(should_use_color && echo -n "$DIM")" \
+        "$label" \
+        "$(should_use_color && echo -n "$NC")" \
+        "$content"
+}
+
+# Print the closing "done" row in green.
+# Usage: print_done "0.6.2a0 on dev"
+print_done() {
+    local content="$1"
+    [[ "$JSON_OUTPUT" == "true" ]] && return 0
+    [[ "$VERBOSITY" -lt 1 ]] && return 0
+    printf "  %b%-${LABEL_WIDTH}s%b%s\n" \
+        "$(should_use_color && echo -n "$GREEN")" \
+        "done" \
+        "$(should_use_color && echo -n "$NC")" \
+        "$content"
+}
+
+# Print a hint row to stderr (remediation suggestion).
+# Color decision uses the stderr TTY since output goes there.
+# Usage: print_hint "git status --porcelain"
+print_hint() {
+    local content="$1"
+    [[ "$JSON_OUTPUT" == "true" ]] && return 0
+    printf "  %b%-${LABEL_WIDTH}s%b%s\n" \
+        "$(should_use_color 2 && echo -n "$CYAN")" \
+        "hint" \
+        "$(should_use_color 2 && echo -n "$NC")" \
+        "$content" >&2
+}
+
+# Print a row only when verbosity >= 2 (verbose mode).
+# Usage: print_row_v checks "uncommitted, branch sync, gh auth"
+print_row_v() {
+    [[ "$VERBOSITY" -lt 2 ]] && return 0
+    print_row "$@"
+}
+
+# ------------------------------------------------------------------------------
+# JSON output buffer
+#
+# Commands accumulate result fields with json_set / json_set_raw, then call
+# json_emit to print a single JSON document on stdout. We avoid associative
+# arrays so the helpers work on bash 3.2 (the macOS default).
+
+JSON_BUFFER=""
+
+# Escape a string for JSON output: backslashes, double quotes, common controls.
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf "%s" "$s"
+}
+
+# Append a string-valued field. Always emits a quoted JSON string, including
+# the empty string. Use json_set_or_null for fields where empty input should
+# round-trip as JSON null instead.
+# Usage: json_set commit "abc1234"
+json_set() {
+    local key="$1"
+    local value="${2:-}"
+    JSON_BUFFER="${JSON_BUFFER},\"$(json_escape "$key")\":\"$(json_escape "$value")\""
+}
+
+# Append a string-valued field, emitting JSON null when the value is empty.
+# Usage: json_set_or_null pr_url "$RELEASE_PR_URL"
+json_set_or_null() {
+    local key="$1"
+    local value="${2:-}"
+    if [[ -z "$value" ]]; then
+        JSON_BUFFER="${JSON_BUFFER},\"$(json_escape "$key")\":null"
+    else
+        JSON_BUFFER="${JSON_BUFFER},\"$(json_escape "$key")\":\"$(json_escape "$value")\""
+    fi
+}
+
+# Append a raw JSON-valued field (numbers, booleans, objects, arrays, null).
+# Caller is responsible for valid JSON.
+# Usage: json_set_raw pr '{"number":42,"url":"..."}'
+json_set_raw() {
+    local key="$1"
+    local raw="$2"
+    JSON_BUFFER="${JSON_BUFFER},\"$(json_escape "$key")\":${raw}"
+}
+
+# Print the buffered JSON document and clear the buffer.
+# Always wraps with schema_version: 1 as the first field.
+json_emit() {
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+        return 0
+    fi
+    local body="\"schema_version\":1${JSON_BUFFER}"
+    printf "{%s}\n" "$body"
+    JSON_BUFFER=""
+}
+
+# ------------------------------------------------------------------------------
+
+# Print warning message with standard format.
+# Accepts an optional second argument for a hint line.
+print_warning() {
+    [[ "$JSON_OUTPUT" == "true" ]] && return 0
+    if should_use_color 2; then
+        printf "%b[WARNING]%b %s\n" "$YELLOW" "$NC" "$1" >&2
+    else
+        printf "[WARNING] %s\n" "$1" >&2
+    fi
+    [[ -n "${2:-}" ]] && print_hint "$2"
+    return 0
+}
+
+# Print error message with standard format.
+# Accepts an optional second argument for a hint line.
+print_error() {
+    if should_use_color 2; then
+        printf "%b[ERROR]%b %s\n" "$RED" "$NC" "$1" >&2
+    else
+        printf "[ERROR] %s\n" "$1" >&2
+    fi
+    [[ -n "${2:-}" ]] && print_hint "$2"
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+
+check_command_availability() {
+    command_string="$1"
+    verbose="${2:-false}"
+    if ! command -v "$command_string" &> /dev/null; then
+        print_error "$command_string is not installed"
+        exit 1
+    fi
+    if [ "$verbose" = "true" ]; then
+        echo "$command_string available"
+    fi
+}
+
+# Standard prerequisites check for release scripts
+# Only requires uv for uv projects; git and gh are always required
+check_required_commands() {
+    check_command_availability git
+    if [[ "$(detect_project_type)" == "uv" ]]; then
+        check_command_availability uv
+    fi
+    check_command_availability gh
+}
+
+# ------------------------------------------------------------------------------
+# Project type detection and version file operations
+
+# Cached project type (set on first call to detect_project_type)
+PROJECT_TYPE=""
+
+# Detect project type: uv (pyproject.toml with version), bash (VERSION file), or none
+detect_project_type() {
+    # Return cached value if already detected
+    if [[ -n "$PROJECT_TYPE" ]]; then
+        echo "$PROJECT_TYPE"
+        return 0
+    fi
+
+    local has_pyproject=false
+    if [[ -f "pyproject.toml" ]]; then
+        # Check for [project] section with a version = field (not dynamic versioning)
+        if grep -v '^[[:space:]]*#' pyproject.toml | grep -q '^\[project\]' && \
+           grep -v '^[[:space:]]*#' pyproject.toml | sed -n '/^\[project\]/,/^\[/p' | grep -q '^version[[:space:]]*='; then
+            has_pyproject=true
+            PROJECT_TYPE="uv"
+        fi
+    fi
+
+    if [[ -z "$PROJECT_TYPE" && -f "VERSION" ]]; then
+        PROJECT_TYPE="bash"
+    fi
+
+    # LaTeX detection: .cls/.sty file at project root with a \Provides line.
+    # Capture the file once so the warning block below can reuse it.
+    local latex_file
+    latex_file=$(get_latex_file 2>/dev/null) || latex_file=""
+    if [[ -z "$PROJECT_TYPE" && -n "$latex_file" ]]; then
+        PROJECT_TYPE="latex"
+    fi
+
+    # Warn when multiple version sources exist
+    if [[ "$has_pyproject" == "true" && -f "VERSION" ]]; then
+        print_warning "Found both pyproject.toml and VERSION; using pyproject.toml"
+    fi
+    if [[ -f "VERSION" && -n "$latex_file" ]]; then
+        print_warning "Found both VERSION and $latex_file; using VERSION (LaTeX \\Provides version will not be bumped)"
+    fi
+
+    if [[ -z "$PROJECT_TYPE" ]]; then
+        PROJECT_TYPE="none"
+    fi
+
+    echo "$PROJECT_TYPE"
+}
+
+# Find the first .cls or .sty file at project root with a Provides line
+# matching \ProvidesClass{...}[YYYY/MM/DD vN.N description] or
+# \ProvidesPackage{...}[...]. Returns 0 and prints the path on success.
+get_latex_file() {
+    local f
+    for f in *.cls *.sty; do
+        [[ -f "$f" ]] || continue
+        if grep -qE '^\\Provides(Class|Package)\{[^}]*\}\[[0-9]{4}/[0-9]{2}/[0-9]{2} v[0-9]' "$f" 2>/dev/null; then
+            echo "$f"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Read the version from a LaTeX project file's \Provides line.
+# Strips the leading 'v'. e.g. file says "v1.20" -> returns "1.20".
+get_version_from_latex() {
+    local f
+    if ! f=$(get_latex_file); then
+        print_error "no .cls/.sty file with a \\ProvidesClass/\\ProvidesPackage version line found in $(pwd)"
+        exit 1
+    fi
+    grep -oE '\[[0-9]{4}/[0-9]{2}/[0-9]{2} v[0-9][^ ]*' "$f" \
+        | head -1 \
+        | sed -E 's|^\[[0-9]{4}/[0-9]{2}/[0-9]{2} v||'
+}
+
+# Write a new version into the LaTeX project file's \Provides line, also
+# updating the date to today (YYYY/MM/DD). Atomic via temp file.
+set_version_in_latex() {
+    local new_ver="$1"
+    local f
+    if ! f=$(get_latex_file); then
+        print_error "no .cls/.sty file with a \\ProvidesClass/\\ProvidesPackage version line found in $(pwd)"
+        exit 1
+    fi
+    local today
+    today=$(date +%Y/%m/%d)
+    sed -E "s|\[[0-9]{4}/[0-9]{2}/[0-9]{2} v[0-9][^ ]*|[$today v$new_ver|" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# Validate a LaTeX-style version: 1 to 3 numeric components.
+# Valid: 1, 1.0, 1.20, 1.2.3.
+validate_latex_version_string() {
+    local v="$1"
+    if [[ ! "$v" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+        print_error "Invalid LaTeX version string: $v"
+        exit 1
+    fi
+}
+
+# Bump a LaTeX version string. patch/minor/major map to the natural
+# component increments; prerelease errors (no LaTeX equivalent).
+bump_latex_version_string() {
+    local v="$1"
+    local bump_type="$2"
+    validate_latex_version_string "$v"
+    if [[ "$bump_type" == "prerelease" ]]; then
+        print_error "LaTeX project type does not support prerelease bumps"
+        exit 1
+    fi
+
+    local IFS='.'
+    # shellcheck disable=SC2206
+    local parts=($v)
+    local n=${#parts[@]}
+
+    case "$bump_type" in
+        patch)
+            parts[$((n - 1))]=$((parts[n - 1] + 1))
+            ;;
+        minor)
+            if [[ $n -ge 2 ]]; then
+                parts[$((n - 2))]=$((parts[n - 2] + 1))
+                parts[$((n - 1))]=0
+            else
+                parts[0]=$((parts[0] + 1))
+            fi
+            ;;
+        major)
+            parts[0]=$((parts[0] + 1))
+            local i
+            for ((i = 1; i < n; i++)); do parts[i]=0; done
+            ;;
+        *)
+            print_error "Unknown bump type: $bump_type"
+            exit 1
+            ;;
+    esac
+
+    echo "${parts[*]}"
+}
+
+# Read version from a plain VERSION file (single-line semver)
+get_version_from_file() {
+    if [[ ! -f "VERSION" ]]; then
+        print_error "VERSION file not found"
+        exit 1
+    fi
+    head -1 VERSION | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# Write version to a plain VERSION file (atomic write)
+set_version_in_file() {
+    echo "$1" > VERSION.tmp && mv VERSION.tmp VERSION
+}
+
+# Validate that a string matches semver with optional alpha prerelease
+# Valid: 1.2.3, 0.1.0a0, 1.0.0a12
+validate_version_string() {
+    local version="$1"
+    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(a[0-9]+)?$ ]]; then
+        print_error "Invalid version string: $version"
+        exit 1
+    fi
+}
+
+# Bump a semver version string in pure bash
+# Supports: prerelease, patch, minor, major (matching uv behavior)
+bump_version_string() {
+    local version="$1"
+    local bump_type="$2"
+    validate_version_string "$version"
+
+    # Split version into components
+    local base="${version%%a*}"
+    local alpha=""
+    if [[ "$version" == *a* ]]; then
+        alpha="${version#*a}"
+    fi
+    local major="${base%%.*}"
+    local rest="${base#*.}"
+    local minor="${rest%%.*}"
+    local patch="${rest#*.}"
+
+    case "$bump_type" in
+        prerelease)
+            if [[ -n "$alpha" ]]; then
+                # Already on alpha: increment alpha number
+                echo "${major}.${minor}.${patch}a$((alpha + 1))"
+            else
+                # Stable: bump patch, then set alpha=0
+                echo "${major}.${minor}.$((patch + 1))a0"
+            fi
+            ;;
+        patch)
+            if [[ -n "$alpha" ]]; then
+                # On alpha: promote to stable (strip alpha)
+                echo "${major}.${minor}.${patch}"
+            else
+                # Stable: increment patch
+                echo "${major}.${minor}.$((patch + 1))"
+            fi
+            ;;
+        minor)
+            echo "${major}.$((minor + 1)).0"
+            ;;
+        major)
+            echo "$((major + 1)).0.0"
+            ;;
+        *)
+            print_error "Unknown bump type: $bump_type"
+            exit 1
+            ;;
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# README title version and CHANGELOG promotion (see plan 008)
+#
+# Two release-time documentation syncs layered onto the version-source bump: an
+# opt-in version token in the README H1 title, and Keep a Changelog
+# "[Unreleased]" promotion. Both are driven from bump_and_commit_version in
+# lib/stanza-release. The awk programs avoid {n,m} interval syntax so they run
+# on the older awk shipped with macOS/BSD.
+
+# Print the version found in README.md's first H1 title with the leading 'v'
+# stripped, e.g. "# pbz2 v0.2.0" -> "0.2.0". Returns 1 when README.md is absent
+# or the title has no "v<version>" token. The token is a 1-3 component numeric
+# version with an optional alpha suffix at a whitespace boundary, covering both
+# semver (0.2.0, 0.2.0a1) and LaTeX-style (1.20) versions.
+get_version_from_readme() {
+    [[ -f "README.md" ]] || return 1
+    local raw
+    raw=$(grep -m1 -E '^#[[:space:]]' README.md 2>/dev/null \
+        | grep -oE '[[:space:]]v[0-9]+(\.[0-9]+)?(\.[0-9]+)?(a[0-9]+)?' \
+        | head -1) || return 1
+    [[ -n "$raw" ]] || return 1
+    raw=$(printf '%s' "$raw" | tr -d '[:space:]')   # " v0.2.0" -> "v0.2.0"
+    echo "${raw#v}"
+}
+
+# Rewrite the version token in README.md's first H1 title to "v<version>".
+# Opt-in and idempotent: a no-op (returns 1) when README.md is absent, the title
+# carries no token (so a repo without one is never given one), or the token
+# already equals the target (so an unchanged README is never restaged). Returns
+# 0 only when it actually rewrote the file.
+set_version_in_readme() {
+    local new_ver="$1"
+    local cur
+    cur=$(get_version_from_readme) || return 1
+    [[ "$cur" == "$new_ver" ]] && return 1
+    awk -v new="$new_ver" '
+        !replaced && /^#[ \t]/ {
+            if (match($0, /[ \t]v[0-9]+(\.[0-9]+)?(\.[0-9]+)?(a[0-9]+)?/)) {
+                $0 = substr($0, 1, RSTART) "v" new substr($0, RSTART + RLENGTH)
+                replaced = 1
+            }
+        }
+        { print }
+    ' README.md > README.md.tmp && mv README.md.tmp README.md
+}
+
+# Classify the first "## [Unreleased]" section of CHANGELOG.md:
+#   absent    - no CHANGELOG.md
+#   missing   - file exists but has no "## [Unreleased]" heading
+#   empty     - the heading exists but has no non-blank content before the next
+#               "## " heading
+#   nonempty  - the heading exists and has content to promote
+changelog_unreleased_status() {
+    [[ -f "CHANGELOG.md" ]] || { echo "absent"; return 0; }
+    awk '
+        /^##[ \t]+\[[Uu]nreleased\]/ { seen = 1; insection = 1; next }
+        insection && /^##[ \t]/ { insection = 0 }
+        insection && /[^ \t\r]/ { nonempty = 1 }
+        END {
+            if (!seen) print "missing"
+            else if (nonempty) print "nonempty"
+            else print "empty"
+        }
+    ' CHANGELOG.md
+}
+
+# Promote the first "## [Unreleased]" section to "## [<version>] - <today>",
+# leaving a fresh empty "## [Unreleased]" above it and keeping the prior content
+# under the new version heading. When a Keep a Changelog compare-link reference
+# "[Unreleased]: <base>/compare/<prev>...HEAD" is present, repoint it to
+# "<base>/compare/v<version>...HEAD" and insert
+# "[<version>]: <base>/compare/<prev>...v<version>" beneath it (base URL and
+# <prev> are parsed from the existing line, so no gh/repo lookup is needed; the
+# tool tags releases as v<version>). When no recognizable compare link exists,
+# only the headings change. Self-guarding: promotes only when the [Unreleased]
+# section is nonempty, so it never manufactures an empty version section.
+# Returns 0 on rewrite, 1 when there is nothing to promote (file left untouched).
+promote_changelog() {
+    local new_ver="$1"
+    local today
+    today=$(date +%Y-%m-%d)
+    [[ -f "CHANGELOG.md" ]] || return 1
+    [[ "$(changelog_unreleased_status)" == "nonempty" ]] || return 1
+    if awk -v ver="$new_ver" -v today="$today" '
+        {
+            line = $0
+            if (!hdr_done && line ~ /^##[ \t]+\[[Uu]nreleased\]/) {
+                print "## [Unreleased]"
+                print ""
+                print "## [" ver "] - " today
+                hdr_done = 1
+                found = 1
+                next
+            }
+            if (!lnk_done && line ~ /^\[[Uu]nreleased\]:.*compare\/.*\.\.\.HEAD[ \t]*$/) {
+                lb = index(line, "]:")
+                val = substr(line, lb + 2)
+                sub(/^[ \t]+/, "", val)
+                ci = index(val, "compare/")
+                if (ci > 0) {
+                    rest = substr(val, ci + 8)
+                    di = index(rest, "...")
+                    if (di > 0) {
+                        base = substr(val, 1, ci + 7)
+                        prev = substr(rest, 1, di - 1)
+                        print "[Unreleased]: " base "v" ver "...HEAD"
+                        print "[" ver "]: " base prev "...v" ver
+                        lnk_done = 1
+                        next
+                    }
+                }
+            }
+            print line
+        }
+        END { exit (found ? 0 : 1) }
+    ' CHANGELOG.md > CHANGELOG.md.tmp; then
+        mv CHANGELOG.md.tmp CHANGELOG.md
+        return 0
+    else
+        rm -f CHANGELOG.md.tmp
+        return 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
+
+# Get current git branch
+get_current_branch() {
+    git branch --show-current
+}
+
+# Get current version (dispatches based on project type)
+get_current_version() {
+    case "$(detect_project_type)" in
+        uv)    uv version --short ;;
+        bash)  get_version_from_file ;;
+        latex) get_version_from_latex ;;
+        none)
+            print_error "No version file found in $(pwd) (pyproject.toml with [project] version, VERSION, or .cls/.sty)"
+            exit 1
+            ;;
+    esac
+}
+
+# ------------------------------------------------------------------------------
+
+# Check if we're in a git repository
+check_git_repo() {
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        print_error "Not in a git repository"
+        exit 1
+    fi
+}
+
+
+# Check if remote repository exists (returns true/false)
+has_remote() {
+    local remote="${1:-origin}"
+    git remote get-url "$remote" &> /dev/null
+    return $?
+}
+
+# Check and warn if remote doesn't exist
+check_remote_exists() {
+    local remote="${1:-origin}"
+    local require="${2:-false}"
+
+    if ! has_remote "$remote"; then
+        if [ "$require" = "true" ]; then
+            print_error "Remote '$remote' does not exist | git remote add $remote <url>"
+            echo "| use: git remote add $remote <url>"
+            exit 1
+        else
+            print_warning "Remote '$remote' not configured - skipping remote operations"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+
+# Validate that we're on a specific branch
+require_branch() {
+    local required_branch="$1"
+    local current_branch=$(get_current_branch)
+
+    if [ "$current_branch" != "$required_branch" ]; then
+        print_error "This operation should be performed on $required_branch branch"
+        echo "Current branch is $current_branch."
+        exit 1
+    fi
+}
+
+# Check if git branch exists, is active, and has no uncommitted changes
+check_git_branch_exists() {
+    local branch="$1"
+    if [ -z "$branch" ]; then
+        print_error "No branch specified"
+        exit 1
+    fi
+    check_git_repo
+    require_branch "$branch"
+}
+
+# Check for uncommitted changes
+check_uncommitted_changes() {
+    if ! git diff-index --quiet HEAD --; then
+        print_error "Uncommitted changes, commit or stash them first."
+        git status --porcelain
+        exit 1
+    fi
+}
+
+# Check that current branch is NOT a protected branch
+check_not_protected_branch() {
+    local current_branch=$(get_current_branch)
+    local protected_branches=("main" "master")
+
+    # Check exact matches
+    for protected in "${protected_branches[@]}"; do
+        if [ "$current_branch" = "$protected" ]; then
+            print_error "Prerelease versions cannot be bumped on protected branch: $current_branch"
+            echo "Please switch to a development or feature branch."
+            exit 1
+        fi
+    done
+}
+
+# Get ahead/behind status for a branch compared to its remote
+# Usage: get_branch_status <branch>
+# Prints: "<ahead> <behind>" or "error" if failed
+# Returns: 0 on success, 1 on error
+get_branch_status() {
+    local branch="${1:-$(get_current_branch)}"
+
+    # Skip if no remote configured
+    if ! has_remote "origin"; then
+        echo "0 0"
+        return 0
+    fi
+
+    # Fetch remote branch quietly
+    if ! git fetch origin "$branch" 2>/dev/null; then
+        echo "error"
+        return 1
+    fi
+
+    # Get ahead/behind counts
+    git rev-list --left-right --count HEAD...origin/$branch 2>/dev/null || echo "0 0"
+}
+
+# Check if branch is up to date with remote
+check_branch_up_to_date() {
+    local branch="$1"
+    local verbose="${2:-false}"
+
+    # Skip if no remote configured
+    if ! has_remote "origin"; then
+        return 0
+    fi
+
+    if [ "$verbose" = "true" ]; then
+        echo "Checking if $branch branch is up to date..."
+    fi
+    # Fetch remote branch
+    if ! git fetch origin "$branch" 2>/dev/null; then
+        print_error "Could not fetch from origin/$branch"
+        exit 1
+    fi
+
+    # Get ahead/behind counts
+    local ahead_behind
+    ahead_behind=$(git rev-list --left-right --count HEAD...origin/$branch 2>/dev/null || echo "0 0")
+    local ahead=$(echo "$ahead_behind" | awk '{print $1}')
+    local behind=$(echo "$ahead_behind" | awk '{print $2}')
+
+    # Check sync status
+    if [ "$ahead" -eq 0 ] && [ "$behind" -eq 0 ]; then
+        if [ "$verbose" = "true" ]; then
+            echo "✓ $branch is up to date with origin/$branch"
+        fi
+        return 0
+    fi
+
+    # Branch has diverged
+    local status_msg="$branch branch status:"
+    [ "$ahead" -gt 0 ] && status_msg="$status_msg $ahead commit(s) ahead"
+    [ "$ahead" -gt 0 ] && [ "$behind" -gt 0 ] && status_msg="$status_msg,"
+    [ "$behind" -gt 0 ] && status_msg="$status_msg $behind commit(s) behind"
+
+    print_error "$status_msg"
+    if [ "$verbose" = "true" ]; then
+        # Provide helpful suggestions
+        if [ "$ahead" -gt 0 ] && [ "$behind" -eq 0 ]; then
+            echo "Push your changes with: git push origin $branch"
+        elif [ "$ahead" -eq 0 ] && [ "$behind" -gt 0 ]; then
+            echo "Pull remote changes with: git pull origin $branch"
+        else
+            echo "Branch has diverged. You may need to:"
+            echo "  - Rebase: git pull --rebase origin $branch"
+            echo "  - Merge: git pull origin $branch"
+        fi
+    fi
+    exit 1
+}
+
+# Detect the base branch (main or master)
+get_base_branch() {
+    # Use remote HEAD ref (set on clone, no network call)
+    local ref
+    ref=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null)
+    if [[ -n "$ref" ]]; then
+        echo "${ref#refs/remotes/origin/}"
+        return 0
+    fi
+
+    # Fall back to checking local branches
+    if git show-ref --verify --quiet refs/heads/main 2>/dev/null; then
+        echo "main"
+    elif git show-ref --verify --quiet refs/heads/master 2>/dev/null; then
+        echo "master"
+    else
+        print_error "No main or master branch found"
+        exit 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
+
+# Check if we should skip remote operations
+should_skip_remote() {
+    if [[ "$LOCAL_ONLY" == "true" ]] || ! has_remote "origin"; then
+        return 0  # Skip remote (true)
+    fi
+    return 1  # Don't skip remote (false)
+}
+
+# Run git command with output control based on verbose flag
+# Usage: git_quiet push origin main
+git_quiet() {
+    if [[ "$VERBOSE" == "true" ]]; then
+        git "$@"
+    else
+        git "$@" > /dev/null 2>&1
+    fi
+}
+
+# Run gh command with output control based on verbose flag
+# Usage: gh_quiet pr merge "$PR_NUMBER" --merge
+gh_quiet() {
+    if [[ "$VERBOSE" == "true" ]]; then
+        gh "$@"
+    else
+        gh "$@" > /dev/null 2>&1
+    fi
+}
+
+# User confirmation with customizable exit message
+confirm_step() {
+    local description="$1"
+    local exit_message="${2:-Exiting workflow}"
+
+    # Auto-confirm if -y flag is set
+    if [[ "$YES_TO_ALL" == "true" ]]; then
+        if [[ $VERBOSE == "true" ]]; then
+            echo "$description? (y/N): y [auto-confirmed]"
+        fi
+        return 0
+    fi
+
+    read -p "$description? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "$exit_message"; exit 0;
+    fi
+}

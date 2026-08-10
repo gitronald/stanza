@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+if [ -z "$BASH_VERSION" ]; then echo "Error: stanza requires bash" >&2; exit 1; fi
+set -e
+
+# Determine STANZA_LIB_DIR (library directory for subcommands)
+# Check development location first, then installed locations
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/../lib/stanza-common" ]]; then
+    # Development mode: lib/ directory relative to script (verify stanza-common exists)
+    STANZA_LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
+elif [[ -d "$HOME/.local/lib/stanza" ]]; then
+    # User installation
+    STANZA_LIB_DIR="$HOME/.local/lib/stanza"
+elif [[ -d "/usr/local/lib/stanza" ]]; then
+    # System installation
+    STANZA_LIB_DIR="/usr/local/lib/stanza"
+else
+    echo "Error: Could not locate stanza library directory" >&2
+    exit 1
+fi
+
+# Export so subcommands can find stanza-common
+export STANZA_LIB_DIR
+
+# Read stanza's own version. Looks first alongside the lib dir (installed
+# layout), then one level up (development layout where lib/ is a sibling
+# of VERSION). Returns "unknown" if neither file is present.
+get_stanza_self_version() {
+    if [[ -f "$STANZA_LIB_DIR/VERSION" ]]; then
+        head -1 "$STANZA_LIB_DIR/VERSION" | tr -d '[:space:]'
+    elif [[ -f "$STANZA_LIB_DIR/../VERSION" ]]; then
+        head -1 "$STANZA_LIB_DIR/../VERSION" | tr -d '[:space:]'
+    else
+        echo "unknown"
+    fi
+}
+
+# Show help message
+show_help() {
+    local stanza_v
+    stanza_v=$(get_stanza_self_version)
+    cat <<EOF
+stanza v${stanza_v}: Semantic versioning workflow with Git and GitHub
+
+Usage: stanza [OPTIONS] [COMMAND]
+
+Options:
+  -q, --quiet      Reduce output to one-line outcomes (errors still print)
+  -v, --verbose    Show step internals (-vv dumps every git/gh command)
+      --json       Emit a single JSON document on stdout
+      --no-color   Disable ANSI color (also honors NO_COLOR env)
+  -V, --version    Show stanza's own version (use 'version' for the project's)
+  -h, --help       Print help
+
+Commands:
+  release   Create a release (patch, minor, major, or prerelease)
+  init      Initialize a GitHub repository
+  guide     Print the agent-facing guide to driving releases
+  version   Show project version
+  help      Print this message
+
+See 'stanza <command> --help' for more information on a specific command.
+EOF
+}
+
+# Default verbosity / output state — exported for subcommands (and stanza-common).
+VERBOSITY=1
+JSON_OUTPUT=false
+NO_COLOR_OVERRIDE=false
+QUIET_REQUESTED=false
+VERBOSE_REQUESTED=false
+
+# Parse leading global flags (before the subcommand). Subcommands may
+# also accept their own copies of these for backwards compatibility.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -q|--quiet)
+            QUIET_REQUESTED=true
+            VERBOSITY=0
+            shift
+            ;;
+        --verbose)
+            VERBOSE_REQUESTED=true
+            if [[ $VERBOSITY -lt 2 ]]; then
+                VERBOSITY=2
+            else
+                VERBOSITY=$((VERBOSITY + 1))
+            fi
+            shift
+            ;;
+        -v*)
+            # Accept -v, -vv, -vvv... (1+ verbosity tier per v)
+            if [[ "$1" =~ ^-v+$ ]]; then
+                VERBOSE_REQUESTED=true
+                vcount=$((${#1} - 1))
+                target=$((vcount + 1))
+                [[ $VERBOSITY -lt $target ]] && VERBOSITY=$target
+                shift
+            else
+                break  # unknown flag like -vasdf, let dispatch handle/error
+            fi
+            ;;
+        --json)
+            JSON_OUTPUT=true
+            shift
+            ;;
+        --no-color)
+            NO_COLOR_OVERRIDE=true
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            # Unknown flag — leave for subcommand to handle (or reject)
+            break
+            ;;
+        *)
+            # First non-flag token is the command
+            break
+            ;;
+    esac
+done
+
+# Mutual exclusion is enforced via stanza-common's check_verbosity_exclusion;
+# subcommands re-check after their own arg parsing in case flags are stacked
+# across positions (e.g., `stanza -q release patch -v`).
+
+# --json wins over verbosity flags for stdout: humans see no progress output.
+# Stderr (errors/warnings) is unaffected. Verbosity still controls internal
+# bookkeeping (e.g., whether git_quiet echoes commands to stderr).
+if [[ "$JSON_OUTPUT" == "true" && "$VERBOSITY" -gt 1 ]]; then
+    : # leave VERBOSITY as-is; print_* helpers gate on JSON_OUTPUT
+fi
+
+# Back-compat: existing scripts use a boolean VERBOSE.
+if [[ "$VERBOSITY" -ge 3 ]]; then
+    VERBOSE=true
+else
+    VERBOSE=false
+fi
+
+export VERBOSITY JSON_OUTPUT NO_COLOR_OVERRIDE VERBOSE QUIET_REQUESTED VERBOSE_REQUESTED
+
+# Run mutual-exclusion check for the no-subcommand and `version` cases too.
+source "$STANZA_LIB_DIR/stanza-common"
+check_verbosity_exclusion
+
+# Show top-level help if no command was provided.
+if [[ $# -eq 0 ]]; then
+    show_help
+    exit 0
+fi
+
+# Get the command
+COMMAND="$1"
+shift
+
+# Route to appropriate subcommand
+case "$COMMAND" in
+    release)
+        # Source and run stanza-release
+        if [[ -f "$STANZA_LIB_DIR/stanza-release" ]]; then
+            source "$STANZA_LIB_DIR/stanza-release"
+        else
+            echo "Error: stanza-release not found in $STANZA_LIB_DIR" >&2
+            exit 1
+        fi
+        ;;
+
+    init)
+        # Source and run stanza-init
+        if [[ -f "$STANZA_LIB_DIR/stanza-init" ]]; then
+            source "$STANZA_LIB_DIR/stanza-init"
+        else
+            echo "Error: stanza-init not found in $STANZA_LIB_DIR" >&2
+            exit 1
+        fi
+        ;;
+
+    guide)
+        if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+            echo "Print the agent-facing guide to driving stanza releases"
+            echo ""
+            echo "Usage: stanza guide"
+            exit 0
+        fi
+        guide_file="$STANZA_LIB_DIR/stanza-guide.md"
+        if [[ -f "$guide_file" ]]; then
+            cat "$guide_file"
+        else
+            echo "Error: guide not found at $guide_file" >&2
+            exit 1
+        fi
+        exit 0
+        ;;
+
+    help|-h|--help)
+        show_help
+        exit 0
+        ;;
+
+    -V|--version)
+        # stanza's own tool version (distinct from the `version` command below,
+        # which reports the current project's version).
+        echo "stanza $(get_stanza_self_version)"
+        exit 0
+        ;;
+
+    version)
+        # Honor global flags placed after the subcommand for back-compat.
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --json)        JSON_OUTPUT=true; shift ;;
+                -q|--quiet)    QUIET_REQUESTED=true; VERBOSITY=0; shift ;;
+                -v|--verbose)  VERBOSE_REQUESTED=true; VERBOSITY=2; shift ;;
+                --no-color)    NO_COLOR_OVERRIDE=true; shift ;;
+                -h|--help)
+                    cat <<'EOF'
+Show project version
+
+Usage: stanza version [OPTIONS]
+
+Options:
+      --json       Emit a single JSON document on stdout
+  -h, --help       Print help
+EOF
+                    exit 0
+                    ;;
+                *)
+                    echo "Error: Unknown option for 'version': $1" >&2
+                    exit 1
+                    ;;
+            esac
+        done
+        # Re-check mutual exclusion in case flags spanned bin and subcommand.
+        check_verbosity_exclusion
+        v=$(get_current_version)
+        if [[ "$JSON_OUTPUT" == "true" ]]; then
+            json_set command "version"
+            json_set version "$v"
+            json_emit
+        else
+            echo "$v"
+        fi
+        exit 0
+        ;;
+
+    *)
+        echo "Error: Unknown command '$COMMAND'" >&2
+        echo "" >&2
+        show_help
+        exit 1
+        ;;
+esac

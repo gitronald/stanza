@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+set -e
+
+# Uninstaller for stanza CLI tool
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Default values
+PREFIX=""
+AUTO_CONFIRM=false
+DETECTED_PREFIX=""
+
+# Print colored messages
+print_error() {
+    echo -e "${RED}Error: $1${NC}" >&2
+}
+
+print_success() {
+    echo -e "${GREEN}$1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}$1${NC}"
+}
+
+print_info() {
+    echo "$1"
+}
+
+# Show help message
+show_help() {
+    cat <<EOF
+Usage: ./uninstall.sh [OPTIONS]
+
+Uninstall stanza CLI tool
+
+Options:
+  --prefix=PATH    Uninstall from custom location
+  --system         Uninstall from /usr/local (requires sudo)
+  -y, --yes        Skip confirmation prompt
+  -h, --help       Show this help message
+
+Examples:
+  ./uninstall.sh                    # Auto-detect and remove
+  sudo ./uninstall.sh --system      # Remove system install
+  ./uninstall.sh --prefix=~/tools   # Remove from custom location
+EOF
+}
+
+# Parse command-line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --prefix=*)
+                PREFIX="${1#*=}"
+                # Expand tilde if present
+                PREFIX="${PREFIX/#\~/$HOME}"
+                shift
+                ;;
+            --system)
+                PREFIX="/usr/local"
+                shift
+                ;;
+            -y|--yes)
+                AUTO_CONFIRM=true
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Auto-detect installation location
+detect_installation() {
+    print_info "Detecting stanza installation..."
+
+    # Check common installation locations in order
+    if [[ -f "$HOME/.local/bin/stanza" ]]; then
+        DETECTED_PREFIX="$HOME/.local"
+        print_info "Found user installation in $DETECTED_PREFIX"
+        return 0
+    elif [[ -f "/usr/local/bin/stanza" ]]; then
+        DETECTED_PREFIX="/usr/local"
+        print_info "Found system installation in $DETECTED_PREFIX"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Verify installation exists at specified prefix
+verify_installation() {
+    local prefix="$1"
+
+    if [[ ! -f "$prefix/bin/stanza" ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# List files that will be removed
+list_files_to_remove() {
+    local prefix="$1"
+    local files=()
+
+    print_info ""
+    print_info "The following will be removed:"
+    print_info ""
+
+    # Binary
+    if [[ -f "$prefix/bin/stanza" ]]; then
+        print_info "  - $prefix/bin/stanza"
+        files+=("$prefix/bin/stanza")
+    fi
+
+    # Library directory
+    if [[ -d "$prefix/lib/stanza" ]]; then
+        print_info "  - $prefix/lib/stanza/ (entire directory)"
+        files+=("$prefix/lib/stanza")
+    fi
+
+    # Check for shell completions (common locations)
+    local completion_files=()
+
+    # Bash completions (system and user locations)
+    if [[ -f "$prefix/share/bash-completion/completions/stanza" ]]; then
+        completion_files+=("$prefix/share/bash-completion/completions/stanza")
+    fi
+    if [[ -f "$HOME/.bash_completion.d/stanza" ]]; then
+        completion_files+=("$HOME/.bash_completion.d/stanza")
+    fi
+
+    # Zsh completions (system and user locations)
+    if [[ -f "$prefix/share/zsh/site-functions/_stanza" ]]; then
+        completion_files+=("$prefix/share/zsh/site-functions/_stanza")
+    fi
+    if [[ -f "$HOME/.zsh/completions/_stanza" ]]; then
+        completion_files+=("$HOME/.zsh/completions/_stanza")
+    fi
+
+    # Display and add completion files if found
+    if [[ ${#completion_files[@]} -gt 0 ]]; then
+        for comp_file in "${completion_files[@]}"; do
+            print_info "  - $comp_file"
+            files+=("$comp_file")
+        done
+    fi
+
+    print_info ""
+}
+
+# Confirm with user
+confirm_removal() {
+    if [[ "$AUTO_CONFIRM" == "true" ]]; then
+        return 0
+    fi
+
+    print_warning "This action cannot be undone."
+    read -p "Do you want to proceed? [y/N] " -n 1 -r
+    echo
+
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_info "Uninstallation cancelled."
+        exit 0
+    fi
+}
+
+# Remove files
+remove_files() {
+    local prefix="$1"
+    local removed_count=0
+
+    print_info ""
+    print_info "Removing stanza installation..."
+
+    # Remove binary
+    if [[ -f "$prefix/bin/stanza" ]]; then
+        rm -f "$prefix/bin/stanza"
+        print_success "Removed $prefix/bin/stanza"
+        ((removed_count++))
+    fi
+
+    # Remove library directory
+    if [[ -d "$prefix/lib/stanza" ]]; then
+        rm -rf "$prefix/lib/stanza"
+        print_success "Removed $prefix/lib/stanza/"
+        ((removed_count++))
+    fi
+
+    # Remove shell completions (system and user locations)
+    local completion_files=(
+        "$prefix/share/bash-completion/completions/stanza"
+        "$HOME/.bash_completion.d/stanza"
+        "$prefix/share/zsh/site-functions/_stanza"
+        "$HOME/.zsh/completions/_stanza"
+    )
+
+    for comp_file in "${completion_files[@]}"; do
+        if [[ -f "$comp_file" ]]; then
+            rm -f "$comp_file"
+            print_success "Removed $comp_file"
+            ((removed_count++))
+        fi
+    done
+
+    print_info ""
+
+    if [[ $removed_count -gt 0 ]]; then
+        print_success "Successfully uninstalled stanza! ($removed_count items removed)"
+    else
+        print_warning "No files were removed."
+    fi
+}
+
+# Main execution
+main() {
+    parse_args "$@"
+
+    # Determine installation prefix
+    if [[ -n "$PREFIX" ]]; then
+        # User specified a prefix
+        if ! verify_installation "$PREFIX"; then
+            print_error "stanza is not installed at $PREFIX"
+            print_info "Could not find: $PREFIX/bin/stanza"
+            exit 1
+        fi
+        print_info "Using specified prefix: $PREFIX"
+    else
+        # Auto-detect installation
+        if ! detect_installation; then
+            print_error "Could not detect stanza installation"
+            print_info ""
+            print_info "Searched in:"
+            print_info "  - $HOME/.local/bin/stanza"
+            print_info "  - /usr/local/bin/stanza"
+            print_info ""
+            print_info "If installed in a custom location, use: --prefix=/path/to/installation"
+            exit 1
+        fi
+        PREFIX="$DETECTED_PREFIX"
+    fi
+
+    # Check permissions for system installations
+    if [[ "$PREFIX" == "/usr/local" ]] && [[ $EUID -ne 0 ]]; then
+        print_error "System uninstallation requires root privileges"
+        print_info "Please run: sudo ./uninstall.sh --system"
+        exit 1
+    fi
+
+    # List files to be removed
+    list_files_to_remove "$PREFIX"
+
+    # Confirm with user
+    confirm_removal
+
+    # Remove files
+    remove_files "$PREFIX"
+}
+
+# Run main function
+main "$@"

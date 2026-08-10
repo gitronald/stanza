@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+# Initialize a GitHub repository and link it to local git
+# Creates a private repo, adds it as remote, and pushes local branches
+set -e
+
+# Source shared utilities
+source "$(dirname "${BASH_SOURCE[0]:-$0}")/stanza-common"
+
+# Default values
+REPO_NAME=""
+DESCRIPTION=""
+VISIBILITY="private"
+HELP=false
+PUSH_ALL_BRANCHES=true
+YES_TO_ALL=false
+INIT_TYPE=""
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -n|--name)
+            REPO_NAME="$2"
+            shift 2
+            ;;
+        -d|--description)
+            DESCRIPTION="$2"
+            shift 2
+            ;;
+        -t|--type)
+            INIT_TYPE="$2"
+            shift 2
+            ;;
+        --public)
+            VISIBILITY="public"
+            shift
+            ;;
+        --current-branch-only)
+            PUSH_ALL_BRANCHES=false
+            shift
+            ;;
+        -y|--yes)
+            YES_TO_ALL=true
+            shift
+            ;;
+        -q|--quiet)
+            QUIET_REQUESTED=true
+            VERBOSITY=0
+            shift
+            ;;
+        --verbose)
+            VERBOSE_REQUESTED=true
+            if [[ $VERBOSITY -lt 2 ]]; then VERBOSITY=2; else VERBOSITY=$((VERBOSITY + 1)); fi
+            shift
+            ;;
+        -v*)
+            if [[ "$1" =~ ^-v+$ ]]; then
+                VERBOSE_REQUESTED=true
+                vcount=$((${#1} - 1))
+                target=$((vcount + 1))
+                [[ $VERBOSITY -lt $target ]] && VERBOSITY=$target
+                shift
+            else
+                print_error "Unknown option '$1'"
+                echo "Use -h or --help for usage information"
+                exit 1
+            fi
+            ;;
+        --json)
+            JSON_OUTPUT=true
+            shift
+            ;;
+        --no-color)
+            NO_COLOR_OVERRIDE=true
+            shift
+            ;;
+        -h|--help)
+            HELP=true
+            shift
+            ;;
+        *)
+            print_error "Unknown option '$1'"
+            echo "Use -h or --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+# Validate after both bin/stanza-level and subcommand-level flag parsing.
+check_verbosity_exclusion
+
+# Show help if requested
+if [[ $HELP == true ]]; then
+    cat <<'EOF'
+Initialize a GitHub repository and link it to local git
+
+Usage: stanza init [OPTIONS]
+
+Options:
+  -n, --name <NAME>              Repository name (default: current directory name)
+  -d, --description <DESC>       Repository description
+  -t, --type <TYPE>              Scaffold a missing version file [possible values: bash, uv]
+      --public                   Create a public repository (default: private)
+      --current-branch-only      Only push current branch (default: push all branches)
+  -y, --yes                      Auto-confirm all prompts (non-interactive mode)
+  -q, --quiet                    Reduce output to one-line outcomes
+  -v, --verbose                  Show step internals (-vv dumps every git/gh command)
+      --json                     Emit a single JSON document on stdout
+      --no-color                 Disable ANSI color (also honors NO_COLOR env)
+  -h, --help                     Print help
+
+Examples:
+  stanza init                                    Private repo, current dir name
+  stanza init -n my-project -d 'My project'      Custom name and description
+  stanza init --public                           Public repository
+  stanza init --current-branch-only              Only push current branch
+  stanza init --type bash                        Also create a VERSION file (0.1.0)
+  stanza init --type uv                          Also create a minimal pyproject.toml
+  stanza --json init -y -n my-tool               Machine-readable output
+EOF
+    exit 0
+fi
+
+# Prerequisites checks
+check_git_repo
+check_required_commands
+
+# Check if remote already exists
+if has_remote "origin"; then
+    print_error "remote 'origin' already exists ($(git remote get-url origin))" \
+        "git remote remove origin   # then re-run stanza init"
+    exit 1
+fi
+
+# Default repo name to current directory name if not provided
+if [[ -z "$REPO_NAME" ]]; then
+    REPO_NAME=$(basename "$(pwd)")
+fi
+
+# Get current branch
+CURRENT_BRANCH=$(get_current_branch)
+
+# --type bash|uv: scaffold a version file if one doesn't already exist.
+SCAFFOLDED_TYPE=""
+SCAFFOLDED_FILE=""
+if [[ -n "$INIT_TYPE" ]]; then
+    case "$INIT_TYPE" in
+        bash)
+            if [[ -f VERSION ]]; then
+                print_row_v type "VERSION already exists, skipping scaffold"
+            else
+                printf "0.1.0\n" > VERSION
+                SCAFFOLDED_TYPE=bash
+                SCAFFOLDED_FILE=VERSION
+            fi
+            ;;
+        uv)
+            if [[ -f pyproject.toml ]]; then
+                print_row_v type "pyproject.toml already exists, skipping scaffold"
+            else
+                cat > pyproject.toml <<EOF
+[project]
+name = "$REPO_NAME"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+EOF
+                SCAFFOLDED_TYPE=uv
+                SCAFFOLDED_FILE=pyproject.toml
+            fi
+            ;;
+        *)
+            print_error "invalid --type: '$INIT_TYPE'" "must be one of: bash, uv"
+            exit 1
+            ;;
+    esac
+fi
+
+# Header banner
+if [[ "$PUSH_ALL_BRANCHES" == true ]]; then
+    PUSH_DESC="all branches"
+else
+    PUSH_DESC="current branch only"
+fi
+print_header "init" "$VISIBILITY, $PUSH_DESC"
+print_row_v context "name=$REPO_NAME, branch=$CURRENT_BRANCH, description=${DESCRIPTION:-<none>}"
+
+# Confirm before proceeding
+confirm_step "Create GitHub repository and link to local git" "Cancelled"
+
+# Create GitHub repository (gh writes its own progress to stdout in verbose mode)
+if [[ "$VERBOSITY" -ge 2 ]]; then
+    if [[ -n "$DESCRIPTION" ]]; then
+        gh repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=origin --description "$DESCRIPTION"
+    else
+        gh repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=origin
+    fi
+else
+    if [[ -n "$DESCRIPTION" ]]; then
+        gh repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=origin --description "$DESCRIPTION" >/dev/null 2>&1
+    else
+        gh repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=origin >/dev/null 2>&1
+    fi
+fi
+
+REPO_URL=$(gh repo view --json url --jq .url)
+ORIGIN_URL=$(git remote get-url origin)
+print_row repo "$REPO_NAME"
+print_row remote "origin -> $ORIGIN_URL"
+if [[ -n "$SCAFFOLDED_FILE" ]]; then
+    print_row type "$SCAFFOLDED_TYPE  created $SCAFFOLDED_FILE (commit before pushing)"
+fi
+
+# Push branches
+PUSHED_BRANCHES=""
+PUSHED_BRANCH_COUNT=0
+if [[ "$PUSH_ALL_BRANCHES" == true ]]; then
+    branches=$(git branch --format='%(refname:short)')
+    if [[ -z "$branches" ]]; then
+        print_warning "No branches found to push"
+    else
+        for branch in $branches; do
+            if [[ "$VERBOSITY" -ge 2 ]]; then
+                git push -u origin "$branch"
+            else
+                git push -u origin "$branch" >/dev/null 2>&1
+            fi
+            PUSHED_BRANCH_COUNT=$((PUSHED_BRANCH_COUNT + 1))
+        done
+        # shellcheck disable=SC2001
+        PUSHED_BRANCHES=$(echo "$branches" | tr '\n' ',' | sed 's/,$//; s/,/, /g')
+        print_row push "$PUSHED_BRANCHES  ($PUSHED_BRANCH_COUNT branches)"
+    fi
+else
+    if [[ "$VERBOSITY" -ge 2 ]]; then
+        git push -u origin "$CURRENT_BRANCH"
+    else
+        git push -u origin "$CURRENT_BRANCH" >/dev/null 2>&1
+    fi
+    PUSHED_BRANCHES="$CURRENT_BRANCH"
+    PUSHED_BRANCH_COUNT=1
+    print_row push "$CURRENT_BRANCH (current only)"
+fi
+
+# Push tags if any exist
+TAGS_PUSHED=false
+TAG_COUNT=0
+if git tag | grep -q .; then
+    TAG_COUNT=$(git tag | wc -l | tr -d ' ')
+    if [[ "$YES_TO_ALL" == "true" ]]; then
+        git push origin --tags >/dev/null 2>&1
+        print_row tags "pushed ($TAG_COUNT tags)"
+        TAGS_PUSHED=true
+    else
+        read -p "Push all tags to remote? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            git push origin --tags >/dev/null 2>&1
+            print_row tags "pushed ($TAG_COUNT tags)"
+            TAGS_PUSHED=true
+        else
+            print_row tags "skipped ($TAG_COUNT tags local)"
+        fi
+    fi
+fi
+
+# JSON output
+json_set command "init"
+json_set repo_name "$REPO_NAME"
+json_set repo_url "$REPO_URL"
+json_set visibility "$VISIBILITY"
+json_set origin "$ORIGIN_URL"
+json_set branches_pushed "$PUSHED_BRANCHES"
+json_set_raw branch_count "$PUSHED_BRANCH_COUNT"
+json_set_raw tag_count "$TAG_COUNT"
+json_set_raw tags_pushed "$TAGS_PUSHED"
+json_set_or_null project_type "$INIT_TYPE"
+json_set_or_null scaffolded_file "$SCAFFOLDED_FILE"
+json_emit
+
+if [[ "$VERBOSITY" -le 0 ]]; then
+    # Quiet mode: print only the repo URL
+    [[ "$JSON_OUTPUT" != "true" ]] && echo "$REPO_URL"
+else
+    print_done "$REPO_URL"
+fi
