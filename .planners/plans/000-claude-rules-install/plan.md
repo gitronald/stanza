@@ -58,7 +58,8 @@ In scope:
    ours.
 4. Help text, bash and zsh completions, README, CHANGELOG.
 5. `tests/test-rules.sh`, isolated from the real home directory.
-6. Decision 2 below: switch the PR merge subject to `merge: PR #<N> - dev`.
+6. Decision 2 below: replace the git and GitHub default merge subjects with
+   stanza's own `version [release]: ...` form.
 
 Out of scope:
 
@@ -135,13 +136,23 @@ stanza rules uninstall [--local]
   the generated marker.
 - `install.sh` already copies `lib/*`, so the prose ships with no other change.
 
-#### 4. PR merge subject
+#### 4. Merge subjects
 
-In `gh_merge_pr`, pass
-`--subject "merge: PR #<N> - dev" --body "<version tag>"` to `gh pr merge`.
-The version tag stays in the body, so `git log` still shows what shipped. The
-local merge and the back-merge keep their current subjects and are documented
-as-is; neither has a PR number.
+The release merge into the base branch gets a subject in the same bracketed
+family as stanza's version commits, so the tool-generated rule covers it.
+`version [release]` is reserved for that release merge:
+
+| Merge | Today | New subject |
+|---|---|---|
+| PR merge (`gh_merge_pr`) | `Merge pull request #<N> from <owner>/dev` | `version [release]: v<version> - PR #<N>` |
+| Local merge (`--local` or no remote) | `v<version>` | `version [release]: v<version>` |
+
+- PR merge: pass `--subject "version [release]: v<version> - PR #<N>" --body ""`
+  to `gh pr merge`. The version moves into the subject, so the body stays empty.
+- Local merge: change the `git merge dev -m` message.
+- The back-merge of the base branch into `dev` is not a release, so it keeps
+  git's default `Merge branch '<base>' into dev`. The rule documents it as a
+  tool-generated form.
 
 #### 5. Docs and completions
 
@@ -169,19 +180,27 @@ real `~/.claude`. Cases:
 - `uninstall` removes a generated file and refuses an unstamped one.
 - `--json` output carries `command`, `action`, `path`, and `status`.
 
-The merge-subject change has no unit test: the existing suites run in local
-mode and never call `gh`. Verify it on the first real release after merge and
-record the resulting subject in the Log.
+For the merge subjects, extend the existing local-mode release tests to check
+the local merge subject. The PR merge subject has no unit test,
+because those suites never call `gh`. Verify it on the first real release after
+this merges and record the resulting subject in the Log.
 
 ### Decisions to confirm
 
 1. **Base branch.** Branch the worktree off `dev`. Recommended; `dev` and the
    base branch are identical at time of writing, and all active development
    lands on `dev`.
-2. **Merge subject.** Adopt `merge: PR #<N> - dev`. Recommended: the generated
-   rule then documents a subject that already matches the common git rules, and
-   the account handle stops landing in base-branch history. The alternative is
-   to keep GitHub's default and document it as a tool-generated form.
+2. **Merge subject.** Adopt stanza's own `version [release]: ...` form for the
+   release merge, PR or local (design section 4). Reserve it for releases: the
+   back-merge into `dev` keeps git's default. Decided. `[release]` rather than
+   `[merge]` because the version tag points at this commit, so it is the release
+   itself; `PR #<N>` rather than a bare `#<N>` so the reference is unambiguous.
+   The complaints came from GitHub's default subject, which reads like a hand-written merge that breaks the git
+   rules. A bracketed stanza subject is recognizably tool-generated, sits in the
+   same family as `version [patch]` and `version [prerelease]`, and keeps the
+   account handle out of base-branch history. This replaces the earlier
+   `merge: PR #<N> - dev` proposal, which would have imitated a hand-written
+   convention from inside the tool.
 3. **Hand-maintained global rules.** After the generated rule is installed on a
    machine, any global rule there that restates stanza specifics (the merge
    subject clause, the changelog claim) should be trimmed to defer to
