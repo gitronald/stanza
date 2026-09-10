@@ -8,6 +8,7 @@ set -e
 PREFIX="$HOME/.local"
 SYSTEM_INSTALL=false
 INSTALL_COMPLETIONS=true
+INSTALL_RULES=true
 
 # Colors for output
 RED='\033[0;31m'
@@ -44,6 +45,7 @@ Options:
   --prefix=PATH         Install to custom location (default: ~/.local)
   --system              Install system-wide to /usr/local (requires sudo)
   --no-completions      Skip shell completion installation
+  --no-rules            Skip the Claude Code rule (~/.claude/rules/stanza.md)
   -h, --help            Show this help message
 
 Examples:
@@ -70,6 +72,10 @@ parse_args() {
                 ;;
             --no-completions)
                 INSTALL_COMPLETIONS=false
+                shift
+                ;;
+            --no-rules)
+                INSTALL_RULES=false
                 shift
                 ;;
             -h|--help)
@@ -136,6 +142,11 @@ confirm_installation() {
         echo "  Shell completions:   Yes"
     else
         echo "  Shell completions:   No"
+    fi
+    if [[ "$INSTALL_RULES" == true && "$SYSTEM_INSTALL" == false ]]; then
+        echo "  Claude Code rule:    Yes, if ~/.claude exists"
+    else
+        echo "  Claude Code rule:    No"
     fi
 
     # Check if running as root when system install is requested
@@ -265,6 +276,30 @@ install_completions() {
     fi
 }
 
+# Install the generated Claude Code rule (~/.claude/rules/stanza.md) via the
+# just-installed binary. Only for user installs where Claude Code is already
+# set up: ~/.claude is never created, and under sudo $HOME is the wrong home.
+install_claude_rule() {
+    if [[ "$INSTALL_RULES" == false ]]; then
+        return
+    fi
+    if [[ "$SYSTEM_INSTALL" == true ]]; then
+        info "Skipping the Claude Code rule for a system install; each user can run: stanza rules install"
+        return
+    fi
+    if [[ ! -d "$HOME/.claude" ]]; then
+        info "Claude Code not detected (~/.claude missing); to add the rule later: stanza rules install"
+        return
+    fi
+
+    info "Installing Claude Code rule..."
+    if "$PREFIX/bin/stanza" -q rules install > /dev/null; then
+        success "Claude Code rule installed to ~/.claude/rules/stanza.md"
+    else
+        warn "Could not install the Claude Code rule; run: stanza rules install"
+    fi
+}
+
 # Check if installation directory is in PATH
 check_path() {
     if [[ ":$PATH:" == *":$PREFIX/bin:"* ]]; then
@@ -325,6 +360,9 @@ main() {
 
     # Install shell completions (if not disabled and if they exist)
     install_completions
+
+    # Install the Claude Code rule (user installs with ~/.claude present)
+    install_claude_rule
 
     # Print success message
     print_success
