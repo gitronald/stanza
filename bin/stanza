@@ -8,6 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/../lib/stanza-common" ]]; then
     # Development mode: lib/ directory relative to script (verify stanza-common exists)
     STANZA_LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
+elif [[ -f "$SCRIPT_DIR/../lib/stanza/stanza-common" ]]; then
+    # Installed layout relative to the binary (any --prefix)
+    STANZA_LIB_DIR="$(cd "$SCRIPT_DIR/../lib/stanza" && pwd)"
 elif [[ -d "$HOME/.local/lib/stanza" ]]; then
     # User installation
     STANZA_LIB_DIR="$HOME/.local/lib/stanza"

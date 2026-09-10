@@ -374,6 +374,21 @@ test_uninstall_script() {
     cleanup
 }
 
+test_install_script_prefix() {
+    echo ""
+    echo "install.sh --prefix installs a binary that finds its library"
+    setup
+
+    local prefix="$TEST_TMPDIR/prefix" out
+    mkdir -p "$HOME/.claude"
+    printf 'y' | "$STANZA_DIR/install.sh" --prefix="$prefix" --no-completions >/dev/null 2>&1
+    out=$(cd / && "$prefix/bin/stanza" help 2>&1 | head -1) || true
+    assert_contains "installed binary finds its library" "$out" "stanza v$SELF_VERSION"
+    assert_eq "installer wrote the rule" "yes" "$([[ -f "$GLOBAL_RULE" ]] && echo yes || echo no)"
+
+    cleanup
+}
+
 # --- Run -------------------------------------------------------------------
 
 test_print
@@ -388,6 +403,7 @@ test_marker_in_prose
 test_write_failure
 test_completion_flags
 test_uninstall_script
+test_install_script_prefix
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

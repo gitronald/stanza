@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An install with `--prefix=<dir>` could not find its own library and exited;
+  `stanza` now looks for `lib/stanza/` next to its own `bin/` directory.
 - `uninstall.sh` stopped after removing the binary, leaving the library and
   completions in place: a `((count++))` from zero exits non-zero under `set -e`.
 
