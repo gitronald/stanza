@@ -104,6 +104,8 @@ stanza release prerelease -y         # bump to the next alpha on the current bra
 - Alpha versions live on `dev`; stable releases are tagged on `main` only.
 - A stable release blocks on an empty `## [Unreleased]`; fill it first (or pass `--no-changelog`).
 - Add `--json` to any command for machine-readable output (`schema_version: 1`).
+- stanza writes its own `version [...]` commit subjects; `stanza rules` lists
+  them, and `stanza rules install` makes that list an always-on Claude Code rule.
 
 ## Worked example (two-stage patch)
 

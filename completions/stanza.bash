@@ -23,7 +23,7 @@ _stanza_completion() {
     _init_completion || return
 
     # Main commands
-    local commands="release init guide help version"
+    local commands="release init guide rules help version"
 
     # Release subcommands: bump types plus the phase tokens (pr, merge)
     local release_types="patch minor major pre prerelease"
@@ -34,6 +34,10 @@ _stanza_completion() {
 
     # Init options
     local init_opts="-n --name -d --description --public --current-branch-only -y --yes -h --help"
+
+    # Rules actions and options
+    local rules_actions="install check uninstall"
+    local rules_opts="--local --force -q --quiet --json --no-color -h --help"
 
     # Handle completion based on position
     case $cword in
@@ -56,6 +60,14 @@ _stanza_completion() {
                     # Complete init options
                     if [[ $cur == -* ]]; then
                         COMPREPLY=($(compgen -W "$init_opts" -- "$cur"))
+                    fi
+                    ;;
+                rules)
+                    # Complete rules actions or options
+                    if [[ $cur == -* ]]; then
+                        COMPREPLY=($(compgen -W "$rules_opts" -- "$cur"))
+                    else
+                        COMPREPLY=($(compgen -W "$rules_actions" -- "$cur"))
                     fi
                     ;;
                 guide|help|version)
@@ -90,6 +102,11 @@ _stanza_completion() {
                             fi
                             ;;
                     esac
+                    ;;
+                rules)
+                    if [[ $cur == -* ]]; then
+                        COMPREPLY=($(compgen -W "$rules_opts" -- "$cur"))
+                    fi
                     ;;
             esac
             ;;
