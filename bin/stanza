@@ -8,6 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/../lib/stanza-common" ]]; then
     # Development mode: lib/ directory relative to script (verify stanza-common exists)
     STANZA_LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
+elif [[ -f "$SCRIPT_DIR/../lib/stanza/stanza-common" ]]; then
+    # Installed layout relative to the binary (any --prefix)
+    STANZA_LIB_DIR="$(cd "$SCRIPT_DIR/../lib/stanza" && pwd)"
 elif [[ -d "$HOME/.local/lib/stanza" ]]; then
     # User installation
     STANZA_LIB_DIR="$HOME/.local/lib/stanza"
@@ -56,6 +59,7 @@ Commands:
   release   Create a release (patch, minor, major, or prerelease)
   init      Initialize a GitHub repository
   guide     Print the agent-facing guide to driving releases
+  rules     Print, install, or check the generated Claude Code rule
   version   Show project version
   help      Print this message
 
@@ -194,6 +198,16 @@ case "$COMMAND" in
             exit 1
         fi
         exit 0
+        ;;
+
+    rules)
+        # Source and run stanza-rules
+        if [[ -f "$STANZA_LIB_DIR/stanza-rules" ]]; then
+            source "$STANZA_LIB_DIR/stanza-rules"
+        else
+            echo "Error: stanza-rules not found in $STANZA_LIB_DIR" >&2
+            exit 1
+        fi
         ;;
 
     help|-h|--help)

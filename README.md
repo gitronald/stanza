@@ -13,7 +13,7 @@ Stanza handles two distinct workflows:
 **Full Release Workflow** (patch/minor/major):
 1. Bump version on dev branch and commit
 2. Create PR from dev to main with formatted body
-3. Merge PR to main branch
+3. Merge PR to main branch (merge commit `version [release]: vX.Y.Z - PR #N`)
 4. Tag release on main and push to remote
 5. Return to dev and bump to next prerelease version
 
@@ -70,6 +70,9 @@ cd stanza
 ./install.sh
 ```
 
+When `~/.claude` exists, `install.sh` also installs the
+[Claude Code rule](#claude-code-rule); pass `--no-rules` to skip it.
+
 ### System Install
 Install system-wide to /usr/local/bin:
 ```bash
@@ -111,6 +114,9 @@ stanza release merge -y        # merge the open PR, tag, open the next cycle
 # Print the agent-facing guide to driving releases
 stanza guide
 
+# Install the Claude Code rule that documents stanza's commits
+stanza rules install
+
 # Show all available commands
 stanza help
 ```
@@ -125,6 +131,7 @@ Available commands:
 - `release` - Create a release (patch, minor, major, or prerelease — also `pre`)
 - `init` - Initialize a GitHub repository
 - `guide` - Print the agent-facing guide to driving releases
+- `rules` - Print, install, or check the generated Claude Code rule
 - `help` - Show help message
 - `version` - Show project version
 
@@ -300,6 +307,29 @@ The guide ships inside the package (`lib/stanza-guide.md`), so it travels with
 every install — any agent can run `stanza guide` from any project to learn the
 workflow.
 
+### Claude Code Rule
+
+stanza writes its own commits: version bumps, the release merge, and the
+back-merge into `dev`. Their subjects follow stanza's format, not hand-written
+commit conventions. `stanza rules` prints a short rule that lists those
+subjects and tells Claude Code to leave them alone, and `stanza rules install`
+writes it where Claude Code loads it automatically:
+
+```bash
+stanza rules                    # print the rule text
+stanza rules install            # write ~/.claude/rules/stanza.md
+stanza rules install --local    # write <repo>/.claude/rules/stanza.md (commit it to share)
+stanza rules check              # ok, drifted, or missing per location; non-zero unless current
+stanza rules uninstall          # remove a rule file stanza generated
+```
+
+The rule text ships inside the package (`lib/stanza-rules.md`), and the
+installed file carries a version stamp, so `stanza rules check` flags a copy
+left over from an older stanza. `install` refuses to overwrite a file it did not
+generate unless you pass `--force`, and `uninstall` never removes one.
+`install.sh` runs `stanza rules install` for user installs when `~/.claude`
+exists (`--no-rules` skips it), and `uninstall.sh` removes the generated file.
+
 ## Shell Completion
 
 Shell completions for bash and zsh are installed automatically by `install.sh`.
@@ -332,6 +362,8 @@ The stanza tool is organized as follows:
 - `lib/stanza-init` - Repository initialization subcommand implementation
 - `lib/stanza-common` - Common utility functions (not meant to be run directly)
 - `lib/stanza-guide.md` - Agent-facing release guide printed by `stanza guide`
+- `lib/stanza-rules` - Claude Code rule subcommand (print, install, check, uninstall)
+- `lib/stanza-rules.md` - Rule text rendered by `stanza rules`
 - `completions/` - Shell completion files for bash and zsh
 - `tests/` - Version bump test suite
 - `install.sh` / `uninstall.sh` - Installation scripts

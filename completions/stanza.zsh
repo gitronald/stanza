@@ -42,6 +42,9 @@ _stanza() {
                 guide)
                     # No arguments for guide
                     ;;
+                rules)
+                    _stanza_rules
+                    ;;
                 help)
                     # No arguments for help
                     ;;
@@ -59,6 +62,7 @@ _stanza_commands() {
         'release:Create a release (patch|minor|major|prerelease)'
         'init:Initialize a GitHub repository'
         'guide:Print the agent-facing release guide'
+        'rules:Print, install, or check the generated Claude Code rule'
         'help:Show help message'
         'version:Show stanza version'
     )
@@ -104,6 +108,46 @@ _stanza_release() {
             if [[ "$line[1]" == "pr" ]]; then
                 _describe 'bump type' release_types
             fi
+            ;;
+    esac
+}
+
+_stanza_rules() {
+    local -a rules_actions
+    rules_actions=(
+        'install:Write the rule file (global, or --local for this repo)'
+        'check:Compare installed rule files to this stanza version'
+        'uninstall:Remove a rule file stanza generated'
+    )
+
+    # --local and --force only where the chosen action takes them
+    local -a rules_opts
+    rules_opts=(
+        '(-q --quiet)'{-q,--quiet}'[Reduce output to one-line outcomes]'
+        '(-v --verbose)'{-v,--verbose}'[Show step internals]'
+        '--json[Emit a single JSON document on stdout]'
+        '--no-color[Disable ANSI color]'
+        '(-h --help)'{-h,--help}'[Show help message]'
+    )
+    case $words[2] in
+        install)
+            rules_opts+=(
+                '--local[Target the repo .claude/rules instead of ~/.claude/rules]'
+                '--force[Overwrite a file stanza did not generate]'
+            )
+            ;;
+        uninstall)
+            rules_opts+=('--local[Target the repo .claude/rules instead of ~/.claude/rules]')
+            ;;
+    esac
+
+    _arguments -C \
+        '1: :->action' \
+        $rules_opts
+
+    case $state in
+        action)
+            _describe 'rules action' rules_actions
             ;;
     esac
 }
