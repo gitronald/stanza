@@ -120,14 +120,30 @@ _stanza_rules() {
         'uninstall:Remove a rule file stanza generated'
     )
 
+    # --local and --force only where the chosen action takes them
+    local -a rules_opts
+    rules_opts=(
+        '(-q --quiet)'{-q,--quiet}'[Reduce output to one-line outcomes]'
+        '(-v --verbose)'{-v,--verbose}'[Show step internals]'
+        '--json[Emit a single JSON document on stdout]'
+        '--no-color[Disable ANSI color]'
+        '(-h --help)'{-h,--help}'[Show help message]'
+    )
+    case $words[2] in
+        install)
+            rules_opts+=(
+                '--local[Target the repo .claude/rules instead of ~/.claude/rules]'
+                '--force[Overwrite a file stanza did not generate]'
+            )
+            ;;
+        uninstall)
+            rules_opts+=('--local[Target the repo .claude/rules instead of ~/.claude/rules]')
+            ;;
+    esac
+
     _arguments -C \
         '1: :->action' \
-        '--local[Target the repo .claude/rules instead of ~/.claude/rules]' \
-        '--force[Overwrite a file stanza did not generate]' \
-        '(-q --quiet)'{-q,--quiet}'[Reduce output to one-line outcomes]' \
-        '--json[Emit a single JSON document on stdout]' \
-        '--no-color[Disable ANSI color]' \
-        '(-h --help)'{-h,--help}'[Show help message]'
+        $rules_opts
 
     case $state in
         action)

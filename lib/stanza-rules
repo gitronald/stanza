@@ -34,6 +34,7 @@ Options:
       --local      Target the current repo instead of ~/.claude
       --force      Overwrite a file stanza did not generate (install only)
   -q, --quiet      Reduce output to one-line outcomes (errors still print)
+  -v, --verbose    Show step internals
       --json       Emit a single JSON document on stdout
       --no-color   Disable ANSI color (also honors NO_COLOR env)
   -h, --help       Print help
@@ -60,6 +61,23 @@ while [[ $# -gt 0 ]]; do
             QUIET_REQUESTED=true
             VERBOSITY=0
             shift
+            ;;
+        --verbose)
+            VERBOSE_REQUESTED=true
+            if [[ $VERBOSITY -lt 2 ]]; then VERBOSITY=2; else VERBOSITY=$((VERBOSITY + 1)); fi
+            shift
+            ;;
+        -v*)
+            if [[ "$1" =~ ^-v+$ ]]; then
+                VERBOSE_REQUESTED=true
+                target=$((${#1}))
+                [[ $VERBOSITY -lt $target ]] && VERBOSITY=$target
+                shift
+            else
+                print_error "Unknown option '$1'"
+                echo "Use -h or --help for usage information"
+                exit 1
+            fi
             ;;
         --json)
             JSON_OUTPUT=true
@@ -126,9 +144,11 @@ render_rules() {
     cat "$RULES_SOURCE"
 }
 
-# True when the file at $1 carries the generated-by-stanza marker.
+# True when the file at $1 opens with the stamp render_rules writes. Only the
+# first line counts, so a hand-written rule that mentions the phrase in prose
+# is never mistaken for a generated one.
 has_rules_marker() {
-    grep -q "$RULES_MARKER" "$1" 2>/dev/null
+    head -1 "$1" 2>/dev/null | grep -q "^<!-- $RULES_MARKER "
 }
 
 # Emit the single-location JSON document shared by install and uninstall.
@@ -160,13 +180,18 @@ rules_install() {
         exit 1
     fi
 
-    local status
-    if [[ -f "$path" ]] && [[ "$(render_rules "$scope")" == "$(< "$path")" ]]; then
+    local status rendered
+    rendered=$(render_rules "$scope")
+    if [[ -f "$path" ]] && [[ "$rendered" == "$(< "$path")" ]]; then
         status="up_to_date"
         print_row current "$path"
     else
         mkdir -p "$(dirname "$path")"
-        render_rules "$scope" > "$path.tmp" && mv "$path.tmp" "$path"
+        if ! { printf '%s\n' "$rendered" > "$path.tmp" && mv "$path.tmp" "$path"; }; then
+            rm -f "$path.tmp"
+            print_error "could not write $path"
+            exit 1
+        fi
         status="wrote"
         print_row wrote "$path"
     fi

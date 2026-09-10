@@ -35,9 +35,9 @@ _stanza_completion() {
     # Init options
     local init_opts="-n --name -d --description --public --current-branch-only -y --yes -h --help"
 
-    # Rules actions and options
+    # Rules actions and options (--local and --force only where the action takes them)
     local rules_actions="install check uninstall"
-    local rules_opts="--local --force -q --quiet --json --no-color -h --help"
+    local rules_opts="-q --quiet -v --verbose --json --no-color -h --help"
 
     # Handle completion based on position
     case $cword in
@@ -105,7 +105,11 @@ _stanza_completion() {
                     ;;
                 rules)
                     if [[ $cur == -* ]]; then
-                        COMPREPLY=($(compgen -W "$rules_opts" -- "$cur"))
+                        case ${words[2]} in
+                            install)   COMPREPLY=($(compgen -W "--local --force $rules_opts" -- "$cur")) ;;
+                            uninstall) COMPREPLY=($(compgen -W "--local $rules_opts" -- "$cur")) ;;
+                            *)         COMPREPLY=($(compgen -W "$rules_opts" -- "$cur")) ;;
+                        esac
                     fi
                     ;;
             esac
