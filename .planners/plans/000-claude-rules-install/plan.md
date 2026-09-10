@@ -1,8 +1,8 @@
 ---
 id: 0
 slug: claude-rules-install
-status: draft
-branch:
+status: active
+branch: feature/claude-rules-install
 created: 2026-09-03T10:51:18-07:00
 concluded:
 pr:
