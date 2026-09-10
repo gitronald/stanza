@@ -5,7 +5,7 @@ status: active
 branch: feature/claude-rules-install
 created: 2026-09-03T10:51:18-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/1
 ---
 
 # Ship a generated Claude Code rule through a stanza rules command
@@ -224,3 +224,37 @@ this merges and record the resulting subject in the Log.
    rule appears among the auto-loaded rules.
 
 Commit in logical chunks as each step lands.
+
+## Log
+
+- 2026-09-09: Activated on `dev`; work in `.worktrees/claude-rules-install`,
+  draft PR opened after the first commit.
+- Release subject settled in review before activation:
+  `version [release]: v<version> - PR #<N>`, and `version [release]: v<version>`
+  when there is no PR. The back-merge into `dev` keeps git's default subject;
+  `version [release]` is reserved for the release itself.
+- Finding: local releases fast-forwarded the base branch, so the contract
+  table's local-merge row (`v<version>`) never produced a commit. Decided with
+  the user: `git_merge_dev_into_main` now merges with `--no-ff`, so every release
+  is a merge commit carrying the subject and the tag.
+- The PR merge subject proved testable after all. The test gh mock now honors
+  `--subject` and merges with `--no-ff` like GitHub, and the release tests assert
+  the subject on the tagged commit for both the full and `merge`-phase paths. An
+  empty `--body` is handled GitHub-side, so still check the first real release.
+- Deviations from the spec: the stamp's regenerate hint is `stanza rules install`
+  (plus `--local`) without `--force`, because install already rewrites a stamped
+  file. `check --json` reports an overall `status` plus a `locations` array, and
+  `rules --json` returns the text as `content`. `--local` is rejected for `check`,
+  which always reports both locations.
+- Fixed in passing: `uninstall.sh` exited after its first removal (`((n++))` from
+  zero under `set -e`), so it would never have reached the rule file.
+- Verification: `tests/test-rules.sh` (52 checks) and every existing suite pass;
+  the release workflow suite grew to 75 checks. End to end under a scratch
+  `HOME`, `install.sh` wrote the rule and `stanza rules check` exited 0, a `HOME`
+  without `~/.claude` got the hint and no directory, and `uninstall.sh -y`
+  removed the rule with the rest of the install. Not verified: the zsh
+  completion (no zsh available) and a fresh Claude Code session loading the rule.
+- Follow-up, outside this plan: a `--prefix=<dir>` install cannot find its own
+  library (`bin/stanza` looks for `../lib/stanza-common`, the installer writes
+  `../lib/stanza/`), so the installed binary exits. This predates the plan; the
+  installer's rule step degrades to a warning there.
