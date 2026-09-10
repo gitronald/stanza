@@ -22,7 +22,7 @@ stanza writes these commits itself:
 | Prerelease bump, including the post-release dev cycle | `version [prerelease]: <version>` |
 | Release merge of the PR into the base branch | `version [release]: v<version> - PR #<N>` |
 | Release merge without a PR (`--local` or no remote) | `version [release]: v<version>` |
-| Back-merge of the base branch into `dev` (remote mode) | `Merge branch '<base>' into dev` |
+| Back-merge of the base branch into `dev` (remote mode; local mode fast-forwards `dev`) | `Merge branch '<base>' into dev` |
 | Tag | `v<version>`, lightweight, on the release merge |
 
 The bump commit also carries the README title sync and the CHANGELOG promotion.

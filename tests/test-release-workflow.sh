@@ -298,6 +298,8 @@ test_local_patch_release() {
     local next_version
     next_version=$(uv version --short)
     assert_eq "dev on next prerelease" "0.2.1a0" "$next_version"
+    assert_eq "dev fast-forwarded onto the release merge" "yes" \
+        "$(git merge-base --is-ancestor "$version_tag" dev && echo yes || echo no)"
 
     cleanup
 }
@@ -390,6 +392,8 @@ test_local_two_stage() {
     assert_eq "dev on next prerelease" "0.1.1a0" "$(uv version --short)"
     assert_eq "tag sits on the local release merge" "version [release]: v0.1.0" \
         "$(git log -1 --format=%s v0.1.0)"
+    assert_eq "dev carries the release merge and its tag" "yes" \
+        "$(git merge-base --is-ancestor v0.1.0 dev && echo yes || echo no)"
 
     cleanup
 }

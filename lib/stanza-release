@@ -729,6 +729,10 @@ create_new_prerelease_cycle() {
     if ! should_skip_remote; then
         git_quiet pull origin dev  # Ensure dev is up to date
         git_quiet merge "$BASE_BRANCH" --no-ff --no-edit  # Force merge commit (keeps graph clean)
+    else
+        # The local release merged dev into the base with --no-ff, so dev is an
+        # ancestor: fast-forward it onto the release merge and its tag.
+        git_quiet merge "$BASE_BRANCH" --ff-only
     fi
 
     # LaTeX projects don't have a prerelease concept; skip the version bump

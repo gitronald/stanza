@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The release merge commit subject is now `version [release]: vX.Y.Z - PR #N`
   instead of GitHub's default `Merge pull request #N from <owner>/dev`.
 - Local releases (`--local` or no remote) now always create a merge commit on
-  the base branch, `version [release]: vX.Y.Z`, instead of fast-forwarding it.
+  the base branch, `version [release]: vX.Y.Z`, instead of fast-forwarding it,
+  and fast-forward `dev` onto that merge before the next prerelease bump.
 
 ### Fixed
 
