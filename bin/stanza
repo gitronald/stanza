@@ -56,6 +56,7 @@ Commands:
   release   Create a release (patch, minor, major, or prerelease)
   init      Initialize a GitHub repository
   guide     Print the agent-facing guide to driving releases
+  rules     Print, install, or check the generated Claude Code rule
   version   Show project version
   help      Print this message
 
@@ -194,6 +195,16 @@ case "$COMMAND" in
             exit 1
         fi
         exit 0
+        ;;
+
+    rules)
+        # Source and run stanza-rules
+        if [[ -f "$STANZA_LIB_DIR/stanza-rules" ]]; then
+            source "$STANZA_LIB_DIR/stanza-rules"
+        else
+            echo "Error: stanza-rules not found in $STANZA_LIB_DIR" >&2
+            exit 1
+        fi
         ;;
 
     help|-h|--help)
