@@ -661,13 +661,16 @@ gh_create_pr() {
 }
 
 # Step 2b: Merge the open dev->base PR (the merge half of the old function).
+# Usage: gh_merge_pr <version_tag> [pr_number]
 # With an explicit PR number (full flow passes the one it just created), that
-# PR is merged directly. With no argument (merge phase) the single open PR is
+# PR is merged directly. With no number (merge phase) the single open PR is
 # resolved, erroring if there are none or more than one. Either way, refuses to
 # merge when dev has advanced past the PR head (would ship unreviewed commits).
+# The merge commit subject is "version [release]: <version_tag> - PR #<N>".
 # Sets RELEASE_PR_NUMBER, RELEASE_PR_URL.
 gh_merge_pr() {
-    local pr_number="${1:-}"
+    local version_tag="$1"
+    local pr_number="${2:-}"
     if [[ -z "$pr_number" ]]; then
         local open_count
         open_count=$(gh pr list --base "$BASE_BRANCH" --head dev --state open --json number --jq 'length' 2>/dev/null || echo 0)
@@ -698,19 +701,22 @@ gh_merge_pr() {
     RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
     PR_URL="$RELEASE_PR_URL"  # back-compat for any callers
     confirm_step "2: Merge PR #$RELEASE_PR_NUMBER from dev into $BASE_BRANCH"
-    gh_quiet pr merge "$RELEASE_PR_NUMBER" --merge
+    gh_quiet pr merge "$RELEASE_PR_NUMBER" --merge \
+        --subject "version [release]: $version_tag - PR #$RELEASE_PR_NUMBER" --body ""
     git_quiet checkout "$BASE_BRANCH"
     git_quiet pull origin "$BASE_BRANCH"
     print_row merge "#$RELEASE_PR_NUMBER merged into $BASE_BRANCH"
 }
 
-# Step 2b: Merge dev into main locally (local workflow).
+# Step 2b: Merge dev into main locally (local workflow). Always a merge commit
+# (--no-ff), so a local release carries the same "version [release]" subject as
+# a PR merge instead of fast-forwarding the base branch.
 # Tagging is handled by the caller via git_tag_version, after this returns.
 git_merge_dev_into_main() {
     local version_tag="$1"
     confirm_step "2: Merge dev into $BASE_BRANCH"
     git_quiet checkout "$BASE_BRANCH"
-    git_quiet merge dev -m "$version_tag"
+    git_quiet merge dev --no-ff -m "version [release]: $version_tag"
     print_row merge "dev into $BASE_BRANCH (local)"
 }
 
@@ -813,7 +819,7 @@ case "$PHASE" in
         RELEASE_VERSION=$(get_current_version)
         if ! should_skip_remote; then
             gh_create_pr "$version_tag"
-            gh_merge_pr "$RELEASE_PR_NUMBER"
+            gh_merge_pr "$version_tag" "$RELEASE_PR_NUMBER"
         else
             git_merge_dev_into_main "$version_tag"
         fi
@@ -891,7 +897,7 @@ case "$PHASE" in
                 version_tag=$(gh pr view "$_merge_pr" --json title --jq '.title' 2>/dev/null || true)
             fi
             [[ -z "${version_tag:-}" ]] && version_tag="v$(get_current_version)"
-            gh_merge_pr "$MERGE_PR_NUMBER"
+            gh_merge_pr "$version_tag" "$MERGE_PR_NUMBER"
         else
             # --local merge cannot tell whether a pr phase promoted the version;
             # refuse to tag a prerelease (alpha) on the base branch.

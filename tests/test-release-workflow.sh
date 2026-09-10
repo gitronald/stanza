@@ -192,8 +192,22 @@ case "$cmd" in
         done
         ;;
       merge)
+        # Like GitHub's --merge: always a merge commit, honoring --subject.
+        subject=""
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --subject) subject="$2"; shift 2 ;;
+            --body) shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        printf '%s' "$subject" > "$STATE/merge_subject"
         git checkout -q main
-        git merge -q --no-edit dev
+        if [[ -n "$subject" ]]; then
+          git merge -q --no-ff -m "$subject" dev
+        else
+          git merge -q --no-ff --no-edit dev
+        fi
         git push -q origin main
         echo closed > "$STATE/state"
         ;;
@@ -265,6 +279,9 @@ test_local_patch_release() {
     local on_main
     on_main=$(git branch --show-current)
     assert_eq "on main after merge" "main" "$on_main"
+    assert_eq "local merge subject" "version [release]: v0.2.0" "$(git log -1 --format=%s)"
+    assert_eq "local merge is a merge commit (no fast-forward)" "2" \
+        "$(git log -1 --format=%p | wc -w | tr -d ' ')"
 
     # Tag version (should not fail with "already exists")
     git_tag_version "$version_tag"
@@ -371,6 +388,8 @@ test_local_two_stage() {
     assert_eq "tag created after merge" "v0.1.0" "$(git tag -l v0.1.0)"
     assert_eq "back on dev after merge" "dev" "$(git branch --show-current)"
     assert_eq "dev on next prerelease" "0.1.1a0" "$(uv version --short)"
+    assert_eq "tag sits on the local release merge" "version [release]: v0.1.0" \
+        "$(git log -1 --format=%s v0.1.0)"
 
     cleanup
 }
@@ -397,6 +416,10 @@ test_remote_two_stage() {
     assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
     assert_eq "PR closed after merge" "closed" "$(cat "$GH_MOCK_STATE/state")"
     assert_contains "merge-phase JSON has phase" "$out" '"phase":"merge"'
+    assert_eq "merge phase passes the release subject to gh" "version [release]: v0.1.0 - PR #1" \
+        "$(cat "$GH_MOCK_STATE/merge_subject")"
+    assert_eq "tag sits on the release merge" "version [release]: v0.1.0 - PR #1" \
+        "$(git log -1 --format=%s v0.1.0)"
 
     teardown_remote_repo
 }
@@ -413,6 +436,12 @@ test_full_release_remote() {
     assert_not_contains "full-release JSON omits phase field" "$out" '"phase"'
     assert_contains "JSON readme_synced false (no README token)" "$out" '"readme_synced":false'
     assert_contains "JSON changelog_promoted false (no CHANGELOG)" "$out" '"changelog_promoted":false'
+    assert_eq "full release passes the release subject to gh" "version [release]: v0.1.0 - PR #1" \
+        "$(cat "$GH_MOCK_STATE/merge_subject")"
+    assert_eq "tag sits on the release merge" "version [release]: v0.1.0 - PR #1" \
+        "$(git log -1 --format=%s v0.1.0)"
+    assert_contains "back-merge into dev keeps git's default subject" \
+        "$(git log --format=%s dev)" "Merge branch 'main' into dev"
 
     teardown_remote_repo
 }
