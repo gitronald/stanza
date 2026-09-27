@@ -92,6 +92,7 @@ check_verbosity_exclusion
 if [[ $HELP == true ]]; then
     cat <<'EOF'
 Initialize a GitHub repository and link it to local git
+(offers to run git init first if the directory is not a git repository)
 
 Usage: stanza init [OPTIONS]
 
@@ -120,8 +121,15 @@ EOF
     exit 0
 fi
 
-# Prerequisites checks
-check_git_repo
+# Prerequisites checks: offer to create the local git repo if there isn't one
+check_command_availability git
+GIT_INITIALIZED=false
+if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    print_warning "Not in a git repository ($(pwd))"
+    confirm_step "Initialize a git repository here" "Cancelled"
+    git_quiet init
+    GIT_INITIALIZED=true
+fi
 check_required_commands
 
 # Check if remote already exists
@@ -189,6 +197,9 @@ else
 fi
 print_header "init" "$VISIBILITY, $PUSH_DESC"
 print_row_v context "name=$REPO_NAME, branch=$CURRENT_BRANCH, description=${DESCRIPTION:-<none>}"
+if [[ "$GIT_INITIALIZED" == true ]]; then
+    print_row git "initialized empty repository (branch $CURRENT_BRANCH)"
+fi
 
 # Confirm before proceeding
 confirm_step "Create GitHub repository and link to local git" "Cancelled"
@@ -219,7 +230,10 @@ fi
 # Push branches
 PUSHED_BRANCHES=""
 PUSHED_BRANCH_COUNT=0
-if [[ "$PUSH_ALL_BRANCHES" == true ]]; then
+if ! git rev-parse --verify -q HEAD > /dev/null; then
+    # Unborn branch (e.g. a repo just created above): nothing to push yet
+    print_row push "skipped (no commits yet; commit, then git push -u origin $CURRENT_BRANCH)"
+elif [[ "$PUSH_ALL_BRANCHES" == true ]]; then
     branches=$(git branch --format='%(refname:short)')
     if [[ -z "$branches" ]]; then
         print_warning "No branches found to push"
@@ -279,6 +293,7 @@ json_set branches_pushed "$PUSHED_BRANCHES"
 json_set_raw branch_count "$PUSHED_BRANCH_COUNT"
 json_set_raw tag_count "$TAG_COUNT"
 json_set_raw tags_pushed "$TAGS_PUSHED"
+json_set_raw git_initialized "$GIT_INITIALIZED"
 json_set_or_null project_type "$INIT_TYPE"
 json_set_or_null scaffolded_file "$SCAFFOLDED_FILE"
 json_emit

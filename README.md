@@ -288,6 +288,8 @@ Examples:
 **Features:**
 - Creates private GitHub repository by default (use `--public` for public)
 - Automatically uses current directory name as repository name
+- Offers to run `git init` when the directory is not a git repository yet
+  (auto-confirmed with `-y`); pushing is skipped until the first commit exists
 - Checks for existing remote before proceeding
 - Pushes all branches by default (or just current with `--current-branch-only`)
 - Optional tag pushing with confirmation prompt
