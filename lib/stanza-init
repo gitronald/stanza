@@ -201,8 +201,12 @@ if [[ "$GIT_INITIALIZED" == true ]]; then
     print_row git "initialized empty repository (branch $CURRENT_BRANCH)"
 fi
 
-# Confirm before proceeding
-confirm_step "Create GitHub repository and link to local git" "Cancelled"
+# Confirm before proceeding (a repo initialized above is kept as local-only)
+CANCEL_MSG="Cancelled"
+if [[ "$GIT_INITIALIZED" == true ]]; then
+    CANCEL_MSG="Cancelled - local git repository kept (run stanza init again to create the GitHub repo)"
+fi
+confirm_step "Create GitHub repository and link to local git" "$CANCEL_MSG"
 
 # Create GitHub repository (gh writes its own progress to stdout in verbose mode)
 if [[ "$VERBOSITY" -ge 2 ]]; then

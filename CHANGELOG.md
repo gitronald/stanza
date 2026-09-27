@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `stanza init` offers to initialize a git repository when run outside one
   (auto-confirmed with `-y`), and skips pushing while the new repo has no
-  commits.
+  commits. Declining the GitHub step afterwards keeps the local-only repo.
 
 ## [1.1.0] - 2026-09-10
 
