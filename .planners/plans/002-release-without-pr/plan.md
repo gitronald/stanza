@@ -50,10 +50,11 @@ steps but merges `dev` into the base branch directly, without a PR.
      the recovery: reset the local base branch to its remote, then open the PR
      and run `stanza release merge`.
    - `git_tag_version` pushes with `git push origin <base> --tags`, which is
-     not atomic, so the tag can land even when the branch is refused. Push
-     the base branch first and the tag only after that succeeds, in two
-     separate pushes (worth checking for the PR path too). `--atomic` was
-     considered and dropped (2026-10-09).
+     not atomic, so the tag can land even when the branch is refused. Use
+     `git push --atomic` for the `--no-pr` push (worth checking for the PR
+     path too). `--atomic` is a standard `git push` option: the remote
+     updates every ref in the push or none of them, so a refused base branch
+     also leaves the tag unpushed. It changes nothing else about the push.
 4. `--no-pr` does not change any other option. `--pr-note` with `--no-pr` has
    nothing to attach to: print a warning that the note is ignored, and carry
    on. Every step except the merge is unchanged: the bump, changelog
