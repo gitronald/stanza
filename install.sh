@@ -214,7 +214,8 @@ latest_version() {
 }
 
 # Install from the checkout this script sits in, unless a version was asked
-# for or there is no checkout; then set FETCH_VERSION for fetch_release.
+# for or there is no checkout; then set FETCH_VERSION for fetch_release (left
+# empty for find_latest_release when no version was asked for).
 choose_source() {
     local dir
     dir="$(checkout_dir)"
@@ -229,14 +230,21 @@ choose_source() {
             error "Invalid version: $REQUESTED_VERSION"
             exit 1
         fi
-    else
-        info "Finding the latest stanza release..."
-        FETCH_VERSION="$(latest_version)"
-        if [[ -z "$FETCH_VERSION" ]]; then
-            error "Could not find the latest release at $REPO_URL"
-            echo "Check your connection, or pass a tag: --version=X.Y.Z"
-            exit 1
-        fi
+    fi
+}
+
+# Set FETCH_VERSION to the latest release when downloading without a pinned
+# version. Runs after check_dependencies, so a missing git is reported as
+# such rather than as an unreachable remote.
+find_latest_release() {
+    [[ -z "$SOURCE_DIR" && -z "$FETCH_VERSION" ]] || return 0
+
+    info "Finding the latest stanza release..."
+    FETCH_VERSION="$(latest_version)"
+    if [[ -z "$FETCH_VERSION" ]]; then
+        error "Could not find the latest release at $REPO_URL"
+        echo "Check your connection, or pass a tag: --version=X.Y.Z"
+        exit 1
     fi
 }
 
@@ -568,6 +576,9 @@ main() {
 
     # Check for required dependencies
     check_dependencies
+
+    # Look up the latest release when downloading without a pinned version
+    find_latest_release
 
     # Confirm installation with user
     confirm_installation
