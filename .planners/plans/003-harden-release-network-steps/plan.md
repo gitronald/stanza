@@ -1,7 +1,7 @@
 ---
 id: 3
 slug: harden-release-network-steps
-status: active
+status: implemented
 branch: feature/harden-release-network-steps
 created: 2026-10-09T17:17:19-07:00
 concluded:
@@ -146,6 +146,7 @@ recovery a single command. Item 5 is for callers.
     job), ShellCheck (not installed here), SSH keepalives against a live
     stalled SSH server (the test only checks that git hands the options to
     ssh), and a run against real GitHub.
+- **2026-10-09T21:58:07-07:00** — Implemented: 5 commits ahead of `dev`.
 
 ## Handoff
 
