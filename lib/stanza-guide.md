@@ -24,6 +24,8 @@ stanza release merge -y              # merge the PR, tag, open the next cycle
   pin the target: `stanza release merge <pr-number>`.
 - Phase 2 refuses to merge if `dev` advanced past the reviewed PR head, so new
   commits can't sneak into the tagged release.
+- Phase 2 also resumes a release that stopped after its merge: re-run
+  `stanza release merge -y` (see *When a release stops partway*).
 
 ## One-shot release (no pause)
 
@@ -71,6 +73,50 @@ The base branch and the tag are pushed atomically, so a protected base branch
 refuses both: no tag lands on the remote. The bump is already on `origin/dev`
 by then, and the error names the recovery: reset the local base branch to its
 remote, open the PR, and run `stanza release merge`.
+
+## When a release stops partway
+
+A failed step prints the error that git or gh gave, then a row naming the step
+(`bump`, `push`, `pr`, `merge`, `tag`, or `cycle`), what it left behind, and the
+command that resumes from there:
+
+```
+  merge   #1 merged into main
+  tag     v0.4.1  pushed
+[ERROR] git pull origin dev failed (exit 1)
+    fatal: unable to access '...': Operation too slow. Less than 1000 bytes/sec transferred the last 30 seconds
+  cycle   failed; v0.4.1 is released; dev is not advanced
+  hint    resume: git checkout dev && stanza release merge -y
+```
+
+`stanza release merge` resumes a release that is already merged and tagged.
+It pushes the tag when only this clone has it, then runs the dev cycle. A
+re-run after the cycle has finished changes nothing. When the error carries a
+hint of its own, that hint replaces the generic resume line.
+
+With `--json`, a failed run still prints one JSON document on stdout, so a
+caller that loses the exit status in a pipe (`stanza ... | tail`) still sees the
+failure:
+
+```json
+{"schema_version":1,"command":"release","phase":"merge","ok":false,
+ "failed_step":"cycle","completed_steps":["merge","tag"],
+ "error":"git pull origin dev failed (exit 1)",
+ "resume":"git checkout dev && stanza release merge -y",
+ "hint":"or by hand: git checkout dev && git pull origin dev && ..."}
+```
+
+- `ok` is `true` on success and `false` on failure.
+- `failed_step` is `"preflight"` when the run stopped before its first step.
+- `completed_steps` lists the steps this run finished, in order.
+- `resume` is `null` when the error gave its own hints, which are then in
+  `hint`.
+
+Git calls that reach the remote give up after `STANZA_NET_STALL_SECONDS`
+(default 30) below 1000 bytes/s, instead of waiting on a stalled connection.
+Set it to `0` to turn this off. Your own `http.lowSpeedLimit`/`http.lowSpeedTime`
+git config wins. For SSH remotes, stanza adds `ServerAlive` keepalives unless
+you set `core.sshCommand`, `GIT_SSH`, or `GIT_SSH_COMMAND` yourself.
 
 ## Attaching a note to the PR
 

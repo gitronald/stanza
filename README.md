@@ -166,12 +166,27 @@ stanza release patch  (dev -> main, uv)
 
 In `--quiet` mode, the same release prints just `0.7.0`. In `--json` mode, the result is a structured document suitable for piping into `jq`.
 
+When a release stops partway, it prints the error git or gh gave, a row naming the failed step, and the command that resumes it:
+
+```
+  tag       v0.7.0  pushed
+[ERROR] git pull origin dev failed (exit 1)
+    fatal: unable to access '...': Operation too slow. Less than 1000 bytes/sec transferred the last 30 seconds
+  cycle     failed; v0.7.0 is released; dev is not advanced
+  hint      resume: git checkout dev && stanza release merge -y
+```
+
+`stanza release merge` resumes a release that is already merged and tagged, and is a no-op once the dev cycle is done. With `--json`, a failed run emits `"ok": false` with `failed_step`, `completed_steps`, `error`, and `resume`. `stanza guide` documents the fields.
+
+Git calls that reach the remote give up when a transfer stays below 1000 bytes/s for `STANZA_NET_STALL_SECONDS` (default 30). Set it to `0` to turn this off. Your own `http.lowSpeed*` git config wins.
+
 ### Release Command
 
 ```bash
 stanza release <BUMP_TYPE>          # Full release (bump, PR, merge, tag, new cycle)
 stanza release pr <BUMP_TYPE>       # Phase 1: bump on dev, open PR, then stop
 stanza release merge [PR_NUMBER]    # Phase 2: merge the open PR, tag, open new cycle
+                                    # (also resumes a release that stopped after its merge)
 
 Arguments:
   <BUMP_TYPE>  Type of version bump:
