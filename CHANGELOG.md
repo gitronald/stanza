@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `install.sh` refuses to download from a repository URL that is not HTTPS
+  (`STANZA_REPO_URL=http://...`), and its `curl` downloads require HTTPS and
+  TLS 1.2 for the request as well as the redirect.
+- The `release-asset` workflow no longer leaves the job token in the
+  checkout's git config while the release script runs.
+
 ## [1.2.0] - 2026-10-10
 
 ### Added
