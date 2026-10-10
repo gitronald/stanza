@@ -1,7 +1,7 @@
 ---
 id: 9
 slug: ledger-installer-output
-status: active
+status: implemented
 branch: feature/ledger-installer-output
 created: 2026-10-10T13:53:07-07:00
 concluded:
@@ -213,3 +213,4 @@ And for a checksum mismatch (stderr):
     not installed here, so it did not run. Not run under bash 3.2. That and
     the Terminal profiles are plan 010's, on a Mac.
 - **2026-10-10T14:14:16-07:00** — PR opened: https://github.com/gitronald/stanza/pull/12
+- **2026-10-10T14:14:18-07:00** — Implemented: 6 commits ahead of `dev`.
