@@ -70,8 +70,8 @@ Examples:
   ./install.sh                    # User install to ~/.local
   sudo ./install.sh --system      # System install to /usr/local
   ./install.sh --prefix=~/tools   # Custom location
-  curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=1.1.3
+  curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash
+  curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=1.1.3
 EOF
 }
 

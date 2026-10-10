@@ -65,19 +65,19 @@ Before installing stanza, ensure you have these dependencies:
 ### Quick Install (User)
 Install the latest release to ~/.local/bin (no sudo required):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash
 ```
 
 Pin a version, or skip the confirmation prompt (required when there is no
 terminal to answer it, e.g. in a provisioning script):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=1.1.3
-curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --yes
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=1.1.3
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --yes
 ```
 
 To read the installer before running it, download it first:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh -o install.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh -o install.sh
 less install.sh
 bash install.sh
 ```
@@ -85,9 +85,11 @@ bash install.sh
 Run outside a checkout, `install.sh` downloads the tagged release's source
 archive from GitHub to a temporary directory, installs from it, and removes
 it. The download is checked only by TLS; there is no separate checksum or
-signature. The script defines everything in functions and calls them on its
-last line, so a download cut off midway runs nothing. It never uses `sudo`
-itself. To upgrade, rerun the same line.
+signature. `--proto '=https' --tlsv1.2` makes curl refuse anything but HTTPS
+(TLS 1.2 or later) when fetching the script, and the script refuses a
+redirect off HTTPS when fetching the archive. The script defines everything
+in functions and calls them on its last line, so a download cut off midway
+runs nothing. It never uses `sudo` itself. To upgrade, rerun the same line.
 
 When `~/.claude` exists, `install.sh` also installs the
 [Claude Code rule](#claude-code-rule); pass `--no-rules` to skip it.
@@ -123,7 +125,7 @@ sudo ./uninstall.sh --system
 
 Without a clone, download the uninstaller and run it:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/uninstall.sh -o uninstall.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/uninstall.sh -o uninstall.sh
 bash uninstall.sh
 ```
 

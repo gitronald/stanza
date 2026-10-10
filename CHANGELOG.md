@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- One-line install without a clone: `curl -fsSL
+- One-line install without a clone: `curl --proto '=https' --tlsv1.2 -fsSL
   https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash`.
   Run outside a checkout, `install.sh` downloads the latest release (or the
   tag given by `--version` / `STANZA_VERSION`) and installs from it.
