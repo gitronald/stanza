@@ -18,6 +18,10 @@ REPO_URL="${STANZA_REPO_URL:-https://github.com/gitronald/stanza}"
 SOURCE_DIR=""
 FETCH_DIR=""
 FETCH_VERSION=""
+# Where completions go when $PREFIX/share cannot be written; these need a
+# line in the shell startup file, so install_completions checks for them
+BASH_COMPLETION_FALLBACK="$HOME/.bash_completion.d/stanza"
+ZSH_COMPLETION_FALLBACK="$HOME/.zsh/completions/_stanza"
 # Version being installed, and where each optional file goes (empty when it
 # is not installed); set by plan_install before the prompt
 INSTALL_VERSION=""
@@ -427,8 +431,8 @@ plan_install() {
         INSTALL_VERSION="$(head -1 "$SOURCE_DIR/VERSION" | tr -d '[:space:]')"
     fi
     if [[ "$INSTALL_COMPLETIONS" == true ]]; then
-        BASH_COMPLETION_DEST="$(completion_dest bash-completion/completions "$HOME/.bash_completion.d/stanza")"
-        ZSH_COMPLETION_DEST="$(completion_dest zsh/site-functions "$HOME/.zsh/completions/_stanza")"
+        BASH_COMPLETION_DEST="$(completion_dest bash-completion/completions "$BASH_COMPLETION_FALLBACK")"
+        ZSH_COMPLETION_DEST="$(completion_dest zsh/site-functions "$ZSH_COMPLETION_FALLBACK")"
     fi
     # Only for user installs where Claude Code is already set up: ~/.claude
     # is never created, and under sudo $HOME is the wrong home
@@ -560,11 +564,11 @@ install_completion() {
 # Install shell completions, with the startup-file line a fallback location needs
 install_completions() {
     if install_completion bash "$SOURCE_DIR/completions/stanza.bash" "$BASH_COMPLETION_DEST" \
-        && [[ "$BASH_COMPLETION_DEST" == "$HOME/.bash_completion.d/stanza" ]]; then
+        && [[ "$BASH_COMPLETION_DEST" == "$BASH_COMPLETION_FALLBACK" ]]; then
         hint "add to $(bash_startup_file): for f in ~/.bash_completion.d/*; do . \"\$f\"; done"
     fi
     if install_completion zsh "$SOURCE_DIR/completions/stanza.zsh" "$ZSH_COMPLETION_DEST" \
-        && [[ "$ZSH_COMPLETION_DEST" == "$HOME/.zsh/completions/_stanza" ]]; then
+        && [[ "$ZSH_COMPLETION_DEST" == "$ZSH_COMPLETION_FALLBACK" ]]; then
         hint "add to ~/.zshrc: fpath=(~/.zsh/completions \$fpath)"
         more "and, if it has no compinit: autoload -Uz compinit && compinit"
     fi
