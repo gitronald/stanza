@@ -9,6 +9,18 @@ PREFIX="$HOME/.local"
 SYSTEM_INSTALL=false
 INSTALL_COMPLETIONS=true
 INSTALL_RULES=true
+ASSUME_YES=false
+# Tag to fetch when installing without a checkout (or with --version)
+REQUESTED_VERSION="${STANZA_VERSION:-}"
+# Repository to fetch from; overridable so tests can point at a local copy
+REPO_URL="${STANZA_REPO_URL:-https://github.com/gitronald/stanza}"
+# Directory holding bin/, lib/, and completions/ (set by choose_source or fetch_release)
+SOURCE_DIR=""
+FETCH_DIR=""
+FETCH_VERSION=""
+# Path of this script, or empty when it arrives on stdin (curl | bash). Read
+# at top level: inside a function a piped script reports "bash" instead.
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -39,11 +51,17 @@ show_help() {
     cat <<EOF
 Usage: ./install.sh [OPTIONS]
 
-Install stanza CLI tool
+Install stanza CLI tool. Run from a checkout, it installs that checkout's
+files. Run any other way (e.g. piped from curl), it downloads a release's
+asset from GitHub first and checks it against the release's SHA-256.
 
 Options:
   --prefix=PATH         Install to custom location (default: ~/.local)
   --system              Install system-wide to /usr/local (requires sudo)
+  --version=TAG         Download and install this tag (X.Y.Z or vX.Y.Z)
+                        instead of the checkout or the latest release
+                        (also read from STANZA_VERSION)
+  -y, --yes             Skip the confirmation prompt
   --no-completions      Skip shell completion installation
   --no-rules            Skip the Claude Code rule (~/.claude/rules/stanza.md)
   -h, --help            Show this help message
@@ -52,6 +70,8 @@ Examples:
   ./install.sh                    # User install to ~/.local
   sudo ./install.sh --system      # System install to /usr/local
   ./install.sh --prefix=~/tools   # Custom location
+  curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash
+  curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=X.Y.Z
 EOF
 }
 
@@ -68,6 +88,27 @@ parse_args() {
             --system)
                 SYSTEM_INSTALL=true
                 PREFIX="/usr/local"
+                shift
+                ;;
+            --version=*)
+                REQUESTED_VERSION="${1#*=}"
+                # Empty would read as "no version" and silently install latest
+                if [[ -z "$REQUESTED_VERSION" ]]; then
+                    error "--version requires a tag (e.g. --version=X.Y.Z)"
+                    exit 1
+                fi
+                shift
+                ;;
+            --version)
+                if [[ $# -lt 2 || -z "$2" ]]; then
+                    error "--version requires a tag (e.g. --version X.Y.Z)"
+                    exit 1
+                fi
+                REQUESTED_VERSION="$2"
+                shift 2
+                ;;
+            -y|--yes)
+                ASSUME_YES=true
                 shift
                 ;;
             --no-completions)
@@ -111,6 +152,19 @@ check_dependencies() {
         missing_deps+=("gh")
     fi
 
+    # Downloading a release needs a fetcher, a SHA-256 tool, and tar
+    if [[ -z "$SOURCE_DIR" ]]; then
+        if ! command -v curl &> /dev/null && ! command -v wget &> /dev/null; then
+            missing_deps+=("curl")
+        fi
+        if ! command -v sha256sum &> /dev/null && ! command -v shasum &> /dev/null; then
+            missing_deps+=("sha256sum")
+        fi
+        if ! command -v tar &> /dev/null; then
+            missing_deps+=("tar")
+        fi
+    fi
+
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         error "Missing required dependencies: ${missing_deps[*]}"
         echo ""
@@ -126,15 +180,197 @@ check_dependencies() {
                 gh)
                     echo "  - gh: https://cli.github.com/manual/installation"
                     ;;
+                curl)
+                    echo "  - curl or wget, to download the release"
+                    ;;
+                sha256sum)
+                    echo "  - sha256sum (coreutils) or shasum, to verify the release"
+                    ;;
+                tar)
+                    echo "  - tar, to unpack the release"
+                    ;;
             esac
         done
         exit 1
     fi
 }
 
+# Directory of this script when it was run from a file inside a stanza
+# checkout; empty when piped (curl | bash) or run from elsewhere.
+checkout_dir() {
+    local dir
+    [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]] || return 0
+    dir="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+    if [[ -f "$dir/bin/stanza" && -d "$dir/lib" ]]; then
+        echo "$dir"
+    fi
+}
+
+# Latest stable tag (vX.Y.Z, no prerelease suffix) on the remote, without the v
+latest_version() {
+    git ls-remote --tags --refs "$REPO_URL" 'v*' 2>/dev/null \
+        | sed -n 's|.*refs/tags/v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' \
+        | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
+}
+
+# Install from the checkout this script sits in, unless a version was asked
+# for or there is no checkout; then set FETCH_VERSION for fetch_release (left
+# empty for find_latest_release when no version was asked for).
+choose_source() {
+    local dir
+    dir="$(checkout_dir)"
+    if [[ -n "$dir" && -z "$REQUESTED_VERSION" ]]; then
+        SOURCE_DIR="$dir"
+        return
+    fi
+
+    if [[ -n "$REQUESTED_VERSION" ]]; then
+        FETCH_VERSION="${REQUESTED_VERSION#v}"
+        if [[ ! "$FETCH_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
+            error "Invalid version: $REQUESTED_VERSION"
+            exit 1
+        fi
+    fi
+}
+
+# Set FETCH_VERSION to the latest release when downloading without a pinned
+# version. Runs after check_dependencies, so a missing git is reported as
+# such rather than as an unreachable remote.
+find_latest_release() {
+    [[ -z "$SOURCE_DIR" && -z "$FETCH_VERSION" ]] || return 0
+
+    info "Finding the latest stanza release..."
+    FETCH_VERSION="$(latest_version)"
+    if [[ -z "$FETCH_VERSION" ]]; then
+        error "Could not find the latest release at $REPO_URL"
+        echo "Check your connection, or pass a tag: --version=X.Y.Z"
+        exit 1
+    fi
+}
+
+# Remove the download directory on exit
+cleanup_fetch() {
+    if [[ -n "$FETCH_DIR" && -d "$FETCH_DIR" ]]; then
+        rm -rf "$FETCH_DIR"
+    fi
+}
+
+# Download $1 to the file $2
+download() {
+    if command -v curl &> /dev/null; then
+        # Refuse a redirect off HTTPS (GitHub serves assets via a redirect)
+        curl -fsSL --proto-redir '=https' --retry 2 -o "$2" "$1"
+    else
+        wget -q -O "$2" "$1"
+    fi
+}
+
+# SHA-256 of the file $1, as lowercase hex
+sha256_of() {
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+# Download release v$FETCH_VERSION's asset and its checksum, refuse to go on
+# unless they match, unpack the asset to a temp directory, and point
+# SOURCE_DIR at the unpacked tree. The asset and checksum are published by
+# scripts/release-asset.sh; tags from before it have neither and are refused.
+fetch_release() {
+    [[ -z "$SOURCE_DIR" ]] || return 0
+
+    local name="stanza-$FETCH_VERSION.tar.gz"
+    local base="$REPO_URL/releases/download/v$FETCH_VERSION"
+    local archive expected actual root
+
+    FETCH_DIR="$(mktemp -d)"
+    trap cleanup_fetch EXIT
+    archive="$FETCH_DIR/$name"
+
+    info "Downloading stanza v$FETCH_VERSION..."
+    if ! download "$base/$name" "$archive"; then
+        error "Could not download the release asset for v$FETCH_VERSION: $base/$name"
+        echo "Only releases published with a checksummed asset can be installed this way."
+        echo "A release tagged in the last few minutes may still be publishing it; retry shortly."
+        echo "To install a tag that has no asset, use a clone:"
+        echo "    git clone --branch v$FETCH_VERSION $REPO_URL stanza && stanza/install.sh"
+        exit 1
+    fi
+    if ! download "$base/$name.sha256" "$archive.sha256"; then
+        error "Could not download the checksum for v$FETCH_VERSION: $base/$name.sha256"
+        echo "Refusing to install an unverified download."
+        exit 1
+    fi
+
+    expected="$(awk 'NR == 1 {print tolower($1)}' "$archive.sha256")"
+    if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+        error "Malformed checksum file: $base/$name.sha256"
+        echo "Refusing to install an unverified download."
+        exit 1
+    fi
+    actual="$(sha256_of "$archive")"
+    if [[ "$actual" != "$expected" ]]; then
+        error "Checksum mismatch for $name; refusing to install it"
+        echo "  expected: $expected"
+        echo "  actual:   $actual"
+        exit 1
+    fi
+    success "Verified SHA-256 $actual"
+
+    mkdir "$FETCH_DIR/src"
+    if ! tar -xzf "$archive" -C "$FETCH_DIR/src"; then
+        error "Could not unpack $base/$name"
+        exit 1
+    fi
+
+    # The asset holds a single top-level directory (stanza-X.Y.Z)
+    for root in "$FETCH_DIR/src"/*/; do
+        if [[ -f "$root/bin/stanza" && -d "$root/lib" ]]; then
+            SOURCE_DIR="${root%/}"
+            break
+        fi
+    done
+    if [[ -z "$SOURCE_DIR" ]]; then
+        error "bin/stanza not found in the v$FETCH_VERSION asset"
+        exit 1
+    fi
+}
+
+# Ask before installing. When the script itself arrives on stdin (curl |
+# bash), the answer comes from the terminal instead; with no terminal, --yes
+# is required rather than assumed. Run from a file, the answer is read from
+# stdin as always, so `printf y | ./install.sh` keeps working.
+confirm_prompt() {
+    if [[ "$ASSUME_YES" == true ]]; then
+        return
+    fi
+
+    if [[ -n "$SCRIPT_PATH" ]]; then
+        read -p "Continue with installation? [Y/n] " -n 1 -r
+    elif (exec < /dev/tty) 2>/dev/null; then
+        read -p "Continue with installation? [Y/n] " -n 1 -r < /dev/tty
+    else
+        error "No terminal to confirm the installation; rerun with --yes"
+        echo "    e.g. curl -fsSL <installer-url> | bash -s -- --yes"
+        exit 1
+    fi
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]?$ ]]; then
+        info "Installation cancelled"
+        exit 0
+    fi
+}
+
 # Confirm installation with user
 confirm_installation() {
     info "Installation configuration:"
+    if [[ -n "$SOURCE_DIR" ]]; then
+        echo "  Source:              $SOURCE_DIR"
+    else
+        echo "  Source:              stanza v$FETCH_VERSION ($REPO_URL)"
+    fi
     echo "  Installation prefix: $PREFIX"
     echo "  Binary directory:    $PREFIX/bin"
     echo "  Library directory:   $PREFIX/lib/stanza"
@@ -152,7 +388,7 @@ confirm_installation() {
     # Check if running as root when system install is requested
     if [[ "$SYSTEM_INSTALL" == true && $EUID -ne 0 ]]; then
         error "System-wide installation requires sudo/root privileges"
-        echo "Please run: sudo ./install.sh --system"
+        echo "Please rerun it with sudo, e.g.: sudo ./install.sh --system"
         exit 1
     fi
 
@@ -163,12 +399,7 @@ confirm_installation() {
     fi
 
     echo ""
-    read -p "Continue with installation? [Y/n] " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]?$ ]]; then
-        info "Installation cancelled"
-        exit 0
-    fi
+    confirm_prompt
 }
 
 # Create installation directories
@@ -193,32 +424,29 @@ create_directories() {
 install_files() {
     info "Installing stanza files..."
 
-    # Get the directory where this script is located
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-
     # Check if required files exist
-    if [[ ! -f "$SCRIPT_DIR/bin/stanza" ]]; then
-        error "bin/stanza not found in $SCRIPT_DIR"
+    if [[ ! -f "$SOURCE_DIR/bin/stanza" ]]; then
+        error "bin/stanza not found in $SOURCE_DIR"
         exit 1
     fi
 
-    if [[ ! -d "$SCRIPT_DIR/lib" ]]; then
-        error "lib directory not found in $SCRIPT_DIR"
+    if [[ ! -d "$SOURCE_DIR/lib" ]]; then
+        error "lib directory not found in $SOURCE_DIR"
         exit 1
     fi
 
     # Copy binary
-    cp "$SCRIPT_DIR/bin/stanza" "$PREFIX/bin/stanza"
+    cp "$SOURCE_DIR/bin/stanza" "$PREFIX/bin/stanza"
     chmod +x "$PREFIX/bin/stanza"
 
     # Copy library files
-    cp -r "$SCRIPT_DIR/lib/"* "$PREFIX/lib/stanza/"
+    cp -r "$SOURCE_DIR/lib/"* "$PREFIX/lib/stanza/"
     chmod +x "$PREFIX/lib/stanza/"*
 
     # Copy the tool's own VERSION file alongside lib so `stanza --help`
     # can display its version regardless of the user's cwd.
-    if [[ -f "$SCRIPT_DIR/VERSION" ]]; then
-        cp "$SCRIPT_DIR/VERSION" "$PREFIX/lib/stanza/VERSION"
+    if [[ -f "$SOURCE_DIR/VERSION" ]]; then
+        cp "$SOURCE_DIR/VERSION" "$PREFIX/lib/stanza/VERSION"
     fi
 
     success "Files installed"
@@ -232,12 +460,9 @@ install_completions() {
 
     info "Installing shell completions..."
 
-    # Get the directory where this script is located
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-
     # Check if completion files exist
-    local bash_completion="$SCRIPT_DIR/completions/stanza.bash"
-    local zsh_completion="$SCRIPT_DIR/completions/stanza.zsh"
+    local bash_completion="$SOURCE_DIR/completions/stanza.bash"
+    local zsh_completion="$SOURCE_DIR/completions/stanza.zsh"
 
     if [[ ! -f "$bash_completion" && ! -f "$zsh_completion" ]]; then
         warn "No completion files found, skipping completion installation"
@@ -346,11 +571,20 @@ main() {
     # Parse command-line arguments
     parse_args "$@"
 
+    # Use this checkout, or pick the release to download
+    choose_source
+
     # Check for required dependencies
     check_dependencies
 
+    # Look up the latest release when downloading without a pinned version
+    find_latest_release
+
     # Confirm installation with user
     confirm_installation
+
+    # Download the release when not installing from a checkout
+    fetch_release
 
     # Create installation directories
     create_directories
@@ -368,5 +602,9 @@ main() {
     print_success
 }
 
-# Run main function
-main "$@"
+# Run main function. Everything above only defines functions and variables,
+# so a truncated download (curl | bash cut off mid-stream) never gets here.
+# The braces make bash read the whole line before running it: a cut inside
+# it is a syntax error, where a bare `main` cut before "$@" would run main
+# with the arguments dropped.
+{ main "$@"; }

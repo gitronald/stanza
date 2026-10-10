@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- One-line install without a clone: `curl --proto '=https' --tlsv1.2 -fsSL
+  https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash`.
+  Run outside a checkout, `install.sh` downloads the latest release (or the
+  tag given by `--version` / `STANZA_VERSION`) and installs from it.
+- Each stable release publishes `stanza-<version>.tar.gz` and its `.sha256` on
+  its GitHub release, built by `scripts/release-asset.sh` from a tag-triggered
+  workflow. The one-line installer downloads that asset and refuses to install
+  it unless it matches the checksum; tags without an asset (v1.1.3 and
+  earlier) are refused, with a pointer to the clone path.
+- `install.sh --yes` skips the confirmation prompt. A piped install reads the
+  answer from the terminal, and fails with a hint to pass `--yes` when there
+  is none.
 - `stanza release merge` resumes a release that is already merged and tagged:
   it pushes the tag if only the local clone has it, then runs the dev cycle. A
   re-run after the cycle has finished is a no-op.
