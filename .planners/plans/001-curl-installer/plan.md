@@ -1,7 +1,7 @@
 ---
 id: 1
 slug: curl-installer
-status: implemented
+status: active
 branch: feature/curl-installer
 created: 2026-10-08T17:47:56-07:00
 concluded:
@@ -273,6 +273,7 @@ have Homebrew.
   - Not changed, by judgment: archive symlinks (a payload with them can
     already run code via `bin/stanza`), and stale `lib/` files on upgrade
     (predates the PR; `bin/stanza` sources its libraries by name).
+- **2026-10-10T12:41:58-07:00** — Reactivated: back to active after review.
 
 ## Handoff
 
