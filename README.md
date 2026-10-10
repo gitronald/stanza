@@ -92,8 +92,8 @@ truncated download and an asset replaced on its own. It does not defend
 against a compromised GitHub account, since whoever can replace the asset
 can replace the checksum beside it; it is not a signature.
 `--proto '=https' --tlsv1.2` makes curl refuse anything but HTTPS (TLS 1.2
-or later) when fetching the script, and the script refuses a redirect off
-HTTPS when fetching the asset. The script defines everything in functions
+or later) when fetching the script, and the script holds its own curl
+downloads of the asset to the same rule, redirects included. The script defines everything in functions
 and calls them on its last line, so a download cut off midway runs nothing.
 It never uses `sudo` itself. To upgrade, rerun the same line.
 

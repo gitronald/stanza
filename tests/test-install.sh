@@ -277,6 +277,15 @@ out=$(STANZA_REPO_URL="file://$SUITE_TMP/missing" piped --yes 2>&1) || status=$?
 assert_eq "exits non-zero" "1" "$status"
 assert_contains "points at --version" "$out" "--version=X.Y.Z"
 
+echo "Plain HTTP remote"
+setup
+status=0
+out=$(STANZA_REPO_URL="http://127.0.0.1:9/stanza" piped --yes 2>&1) || status=$?
+assert_eq "exits non-zero" "1" "$status"
+assert_contains "names the non-HTTPS URL" "$out" "non-HTTPS repository URL"
+assert_not_contains "fails before any lookup" "$out" "Finding the latest"
+assert_eq "nothing installed" "none" "$(installed_version)"
+
 # --- Confirmation ----------------------------------------------------------
 
 echo "Piped without --yes and without a terminal"

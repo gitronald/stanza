@@ -231,6 +231,14 @@ choose_source() {
             exit 1
         fi
     fi
+
+    # Fetch over HTTPS only (file:// is the tests' local stand-in). This is
+    # the only scheme check wget gets: its --https-only covers recursive
+    # downloads, not a plain URL or a redirect.
+    if [[ ! "$REPO_URL" =~ ^(https|file):// ]]; then
+        error "Refusing to fetch from a non-HTTPS repository URL: $REPO_URL"
+        exit 1
+    fi
 }
 
 # Set FETCH_VERSION to the latest release when downloading without a pinned
@@ -258,8 +266,10 @@ cleanup_fetch() {
 # Download $1 to the file $2
 download() {
     if command -v curl &> /dev/null; then
-        # Refuse a redirect off HTTPS (GitHub serves assets via a redirect)
-        curl -fsSL --proto-redir '=https' --retry 2 -o "$2" "$1"
+        # HTTPS (or the tests' file://) for the request, HTTPS only for the
+        # redirect GitHub serves assets through
+        curl -fsSL --proto '=https,file' --tlsv1.2 --proto-redir '=https' \
+            --retry 2 -o "$2" "$1"
     else
         wget -q -O "$2" "$1"
     fi
