@@ -182,3 +182,33 @@ And for a checksum mismatch (stderr):
   - Base: `dev` at `3ef5fc1`
   - Worktree: `.worktrees/ledger-installer-output`
   - PR: pending
+- **2026-10-10T14:13:57-07:00** — Implemented steps 1-8.
+  - `install.sh` and `uninstall.sh` carry one identical helper block
+    (`use_color`, `header`, `row`, `warn`/`hint`/`error`/`more`/`done_row`,
+    `tilde`) between `# --- Output helpers` markers.
+    `tests/test-install.sh` asserts the two blocks are byte-identical and
+    compares the label width and SGR codes with `lib/stanza-common`. A
+    mutated SGR code in a scratch copy failed the check, as it should.
+  - Step 1: `uninstall.sh` cannot source `lib/stanza-common`. The README
+    tells users without a clone to download it alone, so `lib/` may not sit
+    beside it. It carries the same copy.
+  - Drift test, `warn`: `stanza-common`'s `YELLOW` is `1;33` (bold), which
+    this plan rules out for the label. The test checks that `warn` keeps
+    YELLOW's hue (`33`) and is not bold, not that the codes are equal.
+  - Pre-prompt block and step rows read the same destinations from
+    `plan_install`, so the completion rows name the fallback paths when
+    `$PREFIX/share` cannot be written (the case on a fresh `HOME`).
+  - Removed the "Finding the latest release" line. The lookup runs before
+    the header, which names the version it found. `create_directories` was
+    folded into `install_files`, so source checks run before anything is
+    created.
+  - Not in the plan: `--no-color` is also pre-scanned in `main`, so an
+    argument error printed before it is parsed also prints without color.
+  - Found, out of scope: `print_row`, `print_done`, and `print_header` in
+    `lib/stanza-common` decide color inside `$(...)`, where fd 1 is the
+    capture pipe, so `stanza release` never colors its stdout rows. The
+    installer's copy decides outside the substitution.
+  - Checks: `tests/test-install.sh` 110 passed, 0 failed (the PTY cases ran
+    under util-linux `script`). The rest of `tests/` passed. shellcheck is
+    not installed here, so it did not run. Not run under bash 3.2. That and
+    the Terminal profiles are plan 010's, on a Mac.
