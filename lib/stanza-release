@@ -227,6 +227,7 @@ bump_version() {
 
     case "$project_type" in
         uv)
+            validate_version_string "$old_version"
             if [[ "$bump_type" == "prerelease" ]]; then
                 if [[ "$old_version" == *a* ]]; then
                     uv version --bump alpha --frozen > /dev/null
@@ -268,6 +269,7 @@ set_version() {
 
     case "$project_type" in
         uv)
+            validate_version_string "$target_version"
             uv version "$target_version" --frozen > /dev/null
             ;;
         bash)

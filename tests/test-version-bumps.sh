@@ -127,5 +127,16 @@ assert_set "0.1.0" "1.0.0a0"
 assert_set "1.0.0a0" "0.5.0"
 
 echo ""
+echo "uv explicit versions reject leading zeros"
+for ver in 01.2.3 1.02.3 1.2.08 1.2.3a09; do
+    if (set_version "$ver") >/dev/null 2>&1; then
+        echo "  FAIL: uv accepted leading zeros in $ver"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: uv rejects leading zeros in $ver"
+        PASS=$((PASS + 1))
+    fi
+done
+
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]] || exit 1
