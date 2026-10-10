@@ -19,8 +19,8 @@ stanza release merge -y              # merge the PR, tag, open the next cycle
 - `<type>` is `patch`, `minor`, or `major`.
 - Phase 1 prints the PR URL and a `resume` hint. With `--json`, the PR number and
   `"resume": "stanza release merge"` are on stdout.
-- Phase 2 re-derives everything it needs (the open PR, the tag from the PR title),
-  so it needs no memory of phase 1. If more than one open `dev -> base` PR exists,
+- Phase 2 re-derives everything it needs (the open PR, the tag from the version
+  on `dev`, which the PR title must match), so it needs no memory of phase 1. If more than one open `dev -> base` PR exists,
   pin the target: `stanza release merge <pr-number>`.
 - Phase 2 refuses to merge if `dev` advanced past the reviewed PR head, so new
   commits can't sneak into the tagged release.
