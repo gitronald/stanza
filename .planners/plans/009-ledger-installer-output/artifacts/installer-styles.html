@@ -1,0 +1,602 @@
+<title>Stanza Installer Styles</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+/* Layout: one reading column of notes; terminal pairs break out wider beneath each direction; a sticky bar switches the terminal profile for every pane at once. */
+:root {
+  --bg: #eceff1;
+  --surface: #f8f9fa;
+  --ink: #1a2127;
+  --muted: #56626d;
+  --rule: #d1d7dc;
+  --accent: #2a5b70;
+  --ok: #2d7439;
+  --warn: #8a5f00;
+  --bad: #ad2a1f;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SF Mono", Menlo, "IBM Plex Mono", Consolas, monospace;
+  --step-0: 0.95rem;
+  --step-1: 1.15rem;
+  --step-2: 1.55rem;
+  --step-3: 2.3rem;
+
+  /* macOS Terminal.app ANSI palette, identical in the Basic and Pro profiles */
+  --a1: rgb(194,54,33);  --a9:  rgb(252,57,31);
+  --a2: rgb(37,188,36);  --a10: rgb(49,231,34);
+  --a3: rgb(173,173,39); --a11: rgb(234,236,35);
+  --a4: rgb(73,46,225);  --a12: rgb(88,51,255);
+  --a5: rgb(211,56,211); --a13: rgb(249,53,248);
+  --a6: rgb(51,187,200); --a14: rgb(20,240,240);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #12161a;
+    --surface: #1a2025;
+    --ink: #e2e6e9;
+    --muted: #98a3ad;
+    --rule: #2c343b;
+    --accent: #84b6cb;
+    --ok: #6fbf7b;
+    --warn: #d9a73f;
+    --bad: #ef7b6e;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #12161a;
+  --surface: #1a2025;
+  --ink: #e2e6e9;
+  --muted: #98a3ad;
+  --rule: #2c343b;
+  --accent: #84b6cb;
+  --ok: #6fbf7b;
+  --warn: #d9a73f;
+  --bad: #ef7b6e;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--step-0);
+  line-height: 1.6;
+  padding-inline: 20px;
+  padding-block: 0 72px;
+}
+.wrap { max-width: 1180px; margin: 0 auto; }
+.col { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: var(--step-3); font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: var(--step-2); font-weight: 600; }
+h3 { font-size: var(--step-1); font-weight: 600; }
+p { margin: 0; }
+code { font-family: var(--font-mono); font-size: 0.88em; background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; padding: 0 0.3em; }
+a { color: var(--accent); }
+
+header.top { padding-block: 44px 20px; display: grid; gap: 14px; }
+.eyebrow { font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.09em; font-size: 0.78rem; color: var(--muted); font-weight: 600; }
+.lede { color: var(--muted); font-size: 1.02rem; }
+
+/* sticky profile bar */
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+  padding-block: 10px;
+  display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center;
+}
+.bar .lbl { font-family: var(--font-display); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { padding: 5px 12px; cursor: pointer; font-size: 0.88rem; border-right: 1px solid var(--rule); background: var(--surface); }
+.seg label:last-of-type { border-right: 0; }
+.seg input:checked + label { background: var(--accent); color: var(--bg); }
+.seg input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: -4px; }
+.chk { display: inline-flex; gap: 6px; align-items: center; font-size: 0.88rem; cursor: pointer; }
+.chk input { accent-color: var(--accent); }
+.chk input:focus-visible { outline: 2px solid var(--accent); }
+.group { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+section.dir { padding-block: 48px 8px; display: grid; gap: 18px; border-bottom: 1px solid var(--rule); }
+.dir-head { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
+.tag { font-family: var(--font-display); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; padding: 2px 8px; border-radius: 3px; border: 1px solid currentColor; }
+.tag.rec { color: var(--ok); }
+.tag.base { color: var(--muted); }
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px 32px; }
+.notes ul { margin: 0; padding-left: 1.1em; display: grid; gap: 4px; }
+.notes h4 { margin: 0 0 4px; font-family: var(--font-display); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.k-ok { color: var(--ok); } .k-warn { color: var(--warn); } .k-bad { color: var(--bad); }
+
+/* terminals */
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 500px), 1fr)); gap: 18px; padding-block: 6px 26px; }
+.term {
+  --t-bg: #ffffff; --t-fg: #000000; --t-bar: #e8e8e8; --t-bar-fg: #4d4d4d; --t-edge: #b9b9b9;
+  border-radius: 10px; overflow: hidden; border: 1px solid var(--t-edge);
+  background: var(--t-bg); color: var(--t-fg);
+  box-shadow: 0 10px 28px -14px rgba(10, 20, 30, 0.35);
+  display: flex; flex-direction: column; min-width: 0;
+}
+body.pro .term { --t-bg: #000000; --t-fg: #f2f2f2; --t-bar: #2b2b2b; --t-bar-fg: #a8a8a8; --t-edge: #444; }
+.tbar { background: var(--t-bar); color: var(--t-bar-fg); font: 500 12px/1 var(--font-body); padding: 8px 10px; display: flex; align-items: center; gap: 10px; }
+.dots { display: inline-flex; gap: 7px; }
+.dots i { width: 11px; height: 11px; border-radius: 50%; background: #ff5f57; display: block; }
+.dots i:nth-child(2) { background: #febc2e; }
+.dots i:nth-child(3) { background: #28c840; }
+.tbar span { flex: 1; text-align: center; margin-right: 45px; }
+.term pre {
+  margin: 0; padding: 12px 14px 16px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--t-fg); flex: 1;
+}
+.term pre i { font-style: normal; }
+.cap { font-size: 0.85rem; color: var(--muted); padding-top: 6px; }
+.figure { display: grid; gap: 0; min-width: 0; }
+
+/* ANSI SGR rendering */
+.b { font-weight: 600; }
+.d { opacity: 0.55; }
+.u4 { text-decoration: underline; }
+.f1 { color: var(--a1); } .f2 { color: var(--a2); } .f3 { color: var(--a3); }
+.f4 { color: var(--a4); } .f5 { color: var(--a5); } .f6 { color: var(--a6); }
+body.bright .b.f1 { color: var(--a9); }  body.bright .b.f2 { color: var(--a10); }
+body.bright .b.f3 { color: var(--a11); } body.bright .b.f4 { color: var(--a12); }
+body.bright .b.f5 { color: var(--a13); } body.bright .b.f6 { color: var(--a14); }
+.prompt { color: var(--t-fg); }
+/* piped: no SGR at all */
+body.plain .term pre i { color: inherit; font-weight: 400; opacity: 1; text-decoration: none; }
+.raw { display: none; }
+body.plain .has-raw .cooked { display: none; }
+body.plain .has-raw .raw { display: block; }
+.esc { background: rgba(173,173,39,0.22); }
+/* locale glyph fallback */
+.ga { display: none; }
+body.ascii .gu { display: none; }
+body.ascii .ga { display: inline; }
+
+/* reference sections */
+section.ref { padding-block: 48px 0; display: grid; gap: 18px; }
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+th { font-family: var(--font-display); font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 28px; }
+.rule h3 { font-size: 1.02rem; margin-bottom: 4px; }
+.rule p { color: var(--ink); }
+.code { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+.code pre { margin: 0; padding: 14px 16px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; }
+.code .c { color: var(--muted); }
+.swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.sw { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; font: 600 12px/1 var(--font-mono); }
+.sw span { padding: 10px 8px; font-variant-numeric: tabular-nums; }
+.sw .w { background: #fff; } .sw .k { background: #000; }
+.sw-name { grid-column: 1 / -1; background: var(--surface); color: var(--muted); font: 500 11px/1 var(--font-body) !important; padding: 6px 8px !important; text-transform: uppercase; letter-spacing: 0.07em; }
+@media (prefers-reduced-motion: no-preference) {
+  .seg label, .term { transition: background-color 0.15s ease; }
+}
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div class="eyebrow">stanza / install.sh</div>
+  <h1>Stanza installer styles</h1>
+  <p class="col lede">Three directions for the messages <code>install.sh</code> prints, next to what it prints today. Every pane uses the 16-color palette of the macOS Terminal app, so what you see here is what a Mac user sees. Switch the profile to check each direction in light, dark, piped to a log, and a non-UTF-8 locale.</p>
+</header>
+
+<div class="bar" role="group" aria-label="Terminal settings">
+  <div class="group">
+    <span class="lbl">Terminal</span>
+    <div class="seg">
+      <input type="radio" name="profile" id="p-basic" value="basic" checked><label for="p-basic">Basic (light)</label>
+      <input type="radio" name="profile" id="p-pro" value="pro"><label for="p-pro">Pro (dark)</label>
+      <input type="radio" name="profile" id="p-plain" value="plain"><label for="p-plain">Piped / NO_COLOR</label>
+    </div>
+  </div>
+  <label class="chk"><input type="checkbox" id="o-bright" checked> Bold text uses bright colors</label>
+  <label class="chk"><input type="checkbox" id="o-ascii"> Non-UTF-8 locale</label>
+</div>
+
+<!-- TODAY -->
+<section class="dir">
+  <div class="dir-head"><h2>Today</h2><span class="tag base">baseline</span></div>
+  <div class="notes col" style="max-width:none">
+    <div>
+      <h4>What breaks on macOS</h4>
+      <ul>
+        <li>Bold yellow <code>Warning:</code> renders as bright yellow when Terminal brightens bold text: <b>1.3:1</b> on the Basic white background. The one line a Mac user must act on (<code>~/.local/bin</code> is not on PATH by default) is the hardest to read.</li>
+        <li>Color is never gated. Piped to a file or a CI log, every line carries raw escape codes. Try <em>Piped</em>.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Also</h4>
+      <ul>
+        <li>The PATH hint names <code>~/.bashrc, ~/.zshrc, etc.</code> rather than the user's shell. On a Mac that is zsh, and login bash reads <code>~/.bash_profile</code>, not <code>~/.bashrc</code>.</li>
+        <li>49 lines for a successful install; each step prints a start line and a done line.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="pair">
+    <div class="figure">
+      <div class="term has-raw"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span>~ — bash — 80×24</span></div>
+<pre class="cooked"><i class="prompt">$ curl … install.sh | bash</i>
+
+<i class="f4">==></i> Stanza CLI Tool Installer
+
+<i class="f4">==></i> Finding the latest stanza release...
+<i class="f4">==></i> Installation configuration:
+  Source:              stanza v1.2.1 (https://github.com/gitronald/stanza)
+  Installation prefix: /Users/you/.local
+  Binary directory:    /Users/you/.local/bin
+  Library directory:   /Users/you/.local/lib/stanza
+  Shell completions:   Yes
+  Claude Code rule:    Yes, if ~/.claude exists
+
+Continue with installation? [Y/n] y
+<i class="f4">==></i> Downloading stanza v1.2.1...
+<i class="f2">==></i> Verified SHA-256 3f9a0c51d2e7b8a46c0e93f1a7d5b2c48e6f0a19d3c7b5e2f8a4d6c1b9e07e71b
+<i class="f4">==></i> Creating installation directories...
+<i class="f2">==></i> Directories created
+<i class="f4">==></i> Installing stanza files...
+<i class="f2">==></i> Files installed
+<i class="f4">==></i> Installing shell completions...
+<i class="f2">==></i> Bash completion installed to ~/.bash_completion.d/stanza
+<i class="f4">==></i> Add this to your ~/.bashrc to enable completions:
+    for f in ~/.bash_completion.d/*; do source "$f"; done
+<i class="f2">==></i> Zsh completion installed to ~/.zsh/completions/_stanza
+<i class="f4">==></i> Add this to your ~/.zshrc to enable completions:
+    fpath=(~/.zsh/completions $fpath)
+    autoload -Uz compinit &amp;&amp; compinit
+<i class="f4">==></i> Installing Claude Code rule...
+<i class="f2">==></i> Claude Code rule installed to ~/.claude/rules/stanza.md
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<i class="f2">==></i> Stanza CLI tool installed successfully!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<i class="f4">==></i> Installation details:
+  Binary:    /Users/you/.local/bin/stanza
+  Libraries: /Users/you/.local/lib/stanza
+
+<i class="b f3">Warning:</i> /Users/you/.local/bin is not in your PATH
+
+<i class="f4">==></i> Add the following to your shell configuration file (~/.bashrc, ~/.zshrc, etc.):
+    export PATH="/Users/you/.local/bin:$PATH"
+
+<i class="f4">==></i> Next steps:
+  1. Ensure /Users/you/.local/bin is in your PATH (see above if needed)
+  2. Test the installation: stanza --help
+  3. View available commands: stanza help
+
+<i class="f4">==></i> For more information, visit: https://github.com/gitronald/stanza
+</pre>
+<pre class="raw">$ curl … install.sh | bash &gt; install.log; cat -v install.log
+
+<i class="esc">^[[0;34m</i>==&gt;<i class="esc">^[[0m</i> Stanza CLI Tool Installer
+
+<i class="esc">^[[0;34m</i>==&gt;<i class="esc">^[[0m</i> Finding the latest stanza release...
+<i class="esc">^[[0;34m</i>==&gt;<i class="esc">^[[0m</i> Installation configuration:
+  Source:              stanza v1.2.1 (https://github.com/gitronald/stanza)
+  …
+<i class="esc">^[[0;34m</i>==&gt;<i class="esc">^[[0m</i> Downloading stanza v1.2.1...
+<i class="esc">^[[0;32m</i>==&gt;<i class="esc">^[[0m</i> Verified SHA-256 3f9a0c51d2e7b8a46c0e93f1a7d5b2c48e6f0a19d3c7b5e2f8a4d6c1b9e07e71b
+<i class="esc">^[[0;34m</i>==&gt;<i class="esc">^[[0m</i> Creating installation directories...
+<i class="esc">^[[0;32m</i>==&gt;<i class="esc">^[[0m</i> Directories created
+  …
+<i class="esc">^[[1;33m</i>Warning:<i class="esc">^[[0m</i> /Users/you/.local/bin is not in your PATH
+</pre>
+      </div>
+      <div class="cap">Fresh install on a Mac. <code>~/.local/bin</code> is not on PATH, and <code>~/.claude</code> exists.</div>
+    </div>
+    <div class="figure">
+      <div class="term has-raw"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span>~ — bash — 80×24</span></div>
+<pre class="cooked"><i class="prompt">$ curl … install.sh | bash</i>
+
+<i class="f4">==></i> Stanza CLI Tool Installer
+
+<i class="f4">==></i> Finding the latest stanza release...
+<i class="f4">==></i> Installation configuration:
+  …
+Continue with installation? [Y/n] y
+<i class="f4">==></i> Downloading stanza v1.2.1...
+<i class="f1">Error:</i> Checksum mismatch for stanza-1.2.1.tar.gz; refusing to install it
+  expected: 3f9a0c51d2e7b8a46c0e93f1a7d5b2c48e6f0a19d3c7b5e2f8a4d6c1b9e07e71b
+  actual:   b7d2e9401c6a5f38e2d07b91c4a6e3f5d8b02a7c19e64f3b5d0a8c2e7f1408ac
+</pre>
+<pre class="raw">$ … 2&gt; err.log; cat -v err.log
+
+<i class="esc">^[[0;31m</i>Error:<i class="esc">^[[0m</i> Checksum mismatch for stanza-1.2.1.tar.gz; refusing to install it
+</pre>
+      </div>
+      <div class="cap">The download does not match its published SHA-256. Nothing is installed, but the output does not say so or say what to do next.</div>
+    </div>
+  </div>
+</section>
+
+<!-- A -->
+<section class="dir">
+  <div class="dir-head"><h2>A. Homebrew, tidied</h2><span class="tag base">smallest change</span></div>
+  <div class="notes col" style="max-width:none">
+    <div>
+      <h4>The idea</h4>
+      <ul>
+        <li>Keep the <code>==></code> arrows Mac users know from Homebrew, but one line per step, not two.</li>
+        <li>Warnings and errors use Homebrew's convention: a red label and plain text, so no message depends on yellow.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li><span class="k-ok">Small diff:</span> mostly deleting the "...created" lines and gating color.</li>
+        <li><span class="k-warn">Blue arrows on Pro:</span> 2.8:1 on black (3.3:1 when bold is brightened). Readable, but the faintest thing on screen.</li>
+        <li>Looks unlike every other stanza command.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="pair">
+    <div class="figure">
+      <div class="term"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span>~ — bash — 80×24</span></div>
+<pre><i class="prompt">$ curl … install.sh | bash</i>
+<i class="b f4">==></i> <i class="b">Installing stanza 1.2.1 to /Users/you/.local</i>
+    bin          /Users/you/.local/bin/stanza
+    lib          /Users/you/.local/lib/stanza
+    completions  zsh, bash
+    Claude rule  ~/.claude/rules/stanza.md
+Continue? [Y/n] y
+<i class="b f4">==></i> <i class="b">Downloading stanza-1.2.1.tar.gz</i>
+<i class="b f4">==></i> <i class="b">Verifying SHA-256</i> 3f9a0c51d2e7b8a4
+<i class="b f4">==></i> <i class="b">Installing files</i>
+<i class="b f4">==></i> <i class="b">Installing completions</i>
+<i class="b f4">==></i> <i class="b">Installing the Claude Code rule</i>
+<i class="f1">Warning</i>: /Users/you/.local/bin is not on your PATH. For zsh, run:
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+<i class="b f4">==></i> <i class="b">Installed stanza 1.2.1</i>
+    Open a new terminal, then run: stanza --help
+</pre>
+      </div>
+      <div class="cap">Fresh install. The PATH line names the user's shell (<code>$SHELL</code>) and its startup file.</div>
+    </div>
+    <div class="figure">
+      <div class="term"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span>~ — bash — 80×24</span></div>
+<pre><i class="prompt">$ curl … install.sh | bash</i>
+<i class="b f4">==></i> <i class="b">Installing stanza 1.2.1 to /Users/you/.local</i>
+    …
+Continue? [Y/n] y
+<i class="b f4">==></i> <i class="b">Downloading stanza-1.2.1.tar.gz</i>
+<i class="f1">Error</i>: SHA-256 mismatch for stanza-1.2.1.tar.gz. Nothing was installed.
+    expected  3f9a0c51d2e7b8a46c0e93f1a7d5b2c48e6f0a19d3c7b5e2f8a4d6c1b9e07e71b
+    actual    b7d2e9401c6a5f38e2d07b91c4a6e3f5d8b02a7c19e64f3b5d0a8c2e7f1408ac
+    Retry the install. If it fails again, report it:
+    https://github.com/gitronald/stanza/issues
+</pre>
+      </div>
+      <div class="cap">Checksum mismatch. The error says what was left behind and what to do.</div>
+    </div>
+  </div>
+</section>
+
+<!-- B -->
+<section class="dir">
+  <div class="dir-head"><h2>B. Ledger</h2><span class="tag rec">recommended</span></div>
+  <div class="notes col" style="max-width:none">
+    <div>
+      <h4>The idea</h4>
+      <ul>
+        <li>The installer speaks the same row grammar as <code>stanza release</code>: a <code>stanza install</code> header, then dim 8-column labels (<code>LABEL_WIDTH</code>) with the content beside them.</li>
+        <li>Color sits on the label only (<code>warn</code>, <code>hint</code>, <code>error</code>, <code>done</code>). The label word carries the meaning, so a weak hue costs nothing.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li><span class="k-ok">One voice:</span> first contact looks like the tool you just installed.</li>
+        <li><span class="k-ok">Short run:</span> 16 lines for the same install, against 49 today.</li>
+        <li><span class="k-warn">Duplicated helper:</span> <code>curl | bash</code> cannot source <code>lib/stanza-common</code> before the download, so <code>install.sh</code> carries its own 20-line copy of <code>print_row</code> and the color gate.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="pair">
+    <div class="figure">
+      <div class="term"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span>~ — bash — 80×24</span></div>
+<pre><i class="prompt">$ curl … install.sh | bash</i>
+<i class="b">stanza install</i>  (v1.2.1, ~/.local)
+  <i class="d">source  </i>github.com/gitronald/stanza, release v1.2.1
+  <i class="d">bin     </i>~/.local/bin/stanza
+  <i class="d">lib     </i>~/.local/lib/stanza
+  <i class="d">extras  </i>zsh and bash completions, Claude Code rule
+
+  Install stanza 1.2.1? [Y/n] y
+
+  <i class="d">fetch   </i>stanza-1.2.1.tar.gz
+  <i class="d">verify  </i>sha256 3f9a0c51d2e7b8a4
+  <i class="d">files   </i>~/.local/bin, ~/.local/lib/stanza
+  <i class="d">shell   </i>zsh and bash completions
+  <i class="d">rule    </i>~/.claude/rules/stanza.md
+  <i class="f3">warn    </i>~/.local/bin is not on your PATH
+  <i class="f6">hint    </i>echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  <i class="f2">done    </i>stanza 1.2.1. Open a new terminal, then run: stanza --help
+</pre>
+      </div>
+      <div class="cap">Fresh install. Paths under <code>$HOME</code> print as <code>~</code>.</div>
+    </div>
+    <div class="figure">
+      <div class="term"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span>~ — bash — 80×24</span></div>
+<pre><i class="prompt">$ curl … install.sh | bash</i>
+<i class="b">stanza install</i>  (v1.2.1, ~/.local)
+  …
+  Install stanza 1.2.1? [Y/n] y
+
+  <i class="d">fetch   </i>stanza-1.2.1.tar.gz
+  <i class="f1">error   </i>sha256 mismatch for stanza-1.2.1.tar.gz; nothing was installed
+          <i class="d">expected</i> 3f9a0c51d2e7b8a46c0e93f1a7d5b2c48e6f0a19d3c7b5e2f8a4d6c1b9e07e71b
+          <i class="d">actual  </i> b7d2e9401c6a5f38e2d07b91c4a6e3f5d8b02a7c19e64f3b5d0a8c2e7f1408ac
+  <i class="f6">hint    </i>retry; if it fails again: github.com/gitronald/stanza/issues
+</pre>
+      </div>
+      <div class="cap">Checksum mismatch. <code>error</code> and <code>hint</code> go to stderr and check <code>-t 2</code> for color, as <code>print_hint</code> does.</div>
+    </div>
+  </div>
+</section>
+
+<!-- C -->
+<section class="dir">
+  <div class="dir-head"><h2>C. Checklist</h2><span class="tag base">friendliest</span></div>
+  <div class="notes col" style="max-width:none">
+    <div>
+      <h4>The idea</h4>
+      <ul>
+        <li>Past-tense lines with a check mark, one per thing that now exists on disk, in the style of the rustup and uv installers.</li>
+        <li>Glyphs fall back to <code>+</code>, <code>!</code>, and <code>x</code> outside a UTF-8 locale. Try <em>Non-UTF-8 locale</em>.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li><span class="k-ok">Easiest to scan</span> for someone who has never used stanza.</li>
+        <li><span class="k-warn">Green on Basic:</span> the check marks are 2.5:1 on white, 1.7:1 if drawn bold. Keep them regular weight.</li>
+        <li>A second visual language next to the CLI's rows.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="pair">
+    <div class="figure">
+      <div class="term"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span>~ — bash — 80×24</span></div>
+<pre><i class="prompt">$ curl … install.sh | bash</i>
+<i class="b">stanza 1.2.1 installer</i>
+
+  Installs to ~/.local:
+    ~/.local/bin/stanza
+    ~/.local/lib/stanza
+    zsh and bash completions, Claude Code rule
+
+  Continue? [Y/n] y
+
+  <i class="f2"><i class="gu">✓</i><i class="ga">+</i></i> Downloaded stanza-1.2.1.tar.gz
+  <i class="f2"><i class="gu">✓</i><i class="ga">+</i></i> Verified SHA-256 3f9a0c51d2e7b8a4
+  <i class="f2"><i class="gu">✓</i><i class="ga">+</i></i> Installed stanza to ~/.local
+  <i class="f2"><i class="gu">✓</i><i class="ga">+</i></i> Added zsh and bash completions
+  <i class="f2"><i class="gu">✓</i><i class="ga">+</i></i> Added the Claude Code rule
+  <i class="f3">!</i> ~/.local/bin is not on your PATH. For zsh, run:
+
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+
+  Installed stanza 1.2.1. Open a new terminal, then run <i class="b">stanza --help</i>
+</pre>
+      </div>
+      <div class="cap">Fresh install.</div>
+    </div>
+    <div class="figure">
+      <div class="term"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span>~ — bash — 80×24</span></div>
+<pre><i class="prompt">$ curl … install.sh | bash</i>
+<i class="b">stanza 1.2.1 installer</i>
+  …
+  Continue? [Y/n] y
+
+  <i class="f2"><i class="gu">✓</i><i class="ga">+</i></i> Downloaded stanza-1.2.1.tar.gz
+  <i class="f1"><i class="gu">✗</i><i class="ga">x</i></i> SHA-256 does not match the published checksum
+      <i class="d">expected</i>  3f9a0c51d2e7b8a46c0e93f1a7d5b2c48e6f0a19d3c7b5e2f8a4d6c1b9e07e71b
+      <i class="d">actual  </i>  b7d2e9401c6a5f38e2d07b91c4a6e3f5d8b02a7c19e64f3b5d0a8c2e7f1408ac
+
+  Nothing was installed. Retry, and if it fails again, report it at
+  https://github.com/gitronald/stanza/issues
+</pre>
+      </div>
+      <div class="cap">Checksum mismatch.</div>
+    </div>
+  </div>
+</section>
+
+<!-- STANDARD WAYS -->
+<section class="ref">
+  <h2>Standard ways to do this in bash</h2>
+  <p class="col">There is no styling library that ships with macOS. Installers meant for <code>curl | bash</code> almost all hand-roll it: a few <code>printf</code> escape codes behind a terminal check. A package would be one more thing to download before the download.</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Approach</th><th>Ships on macOS</th><th>Fit for install.sh</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><b>Raw ANSI SGR via <code>printf</code></b><br><code>printf '\033[31m%s\033[0m' …</code></td><td class="k-ok">Yes, it is just bytes</td><td class="k-ok">Best</td><td>What Homebrew's and rustup's installers do, and what stanza already does. Gate it on <code>[ -t 1 ]</code> and <code>NO_COLOR</code>.</td></tr>
+        <tr><td><b><code>tput</code></b> (ncurses terminfo)<br><code>tput setaf 1; tput bold; tput sgr0</code></td><td class="k-ok">Yes, <code>/usr/bin/tput</code></td><td class="k-warn">Workable</td><td>The textbook-portable route: it asks terminfo instead of assuming ANSI. With <code>TERM</code> unset (CI, cron) it prints an error to stderr unless you guard it. Call it once and cache the results in variables.</td></tr>
+        <tr><td><b>Conventions</b><br><code>NO_COLOR</code>, <code>CLICOLOR</code>, <code>CLICOLOR_FORCE</code>, <code>TERM=dumb</code></td><td>n/a</td><td class="k-ok">Honor them</td><td><a href="https://no-color.org">no-color.org</a> is the cross-tool standard and stanza already honors it. <code>CLICOLOR</code> and <code>CLICOLOR_FORCE</code> are the BSD and macOS convention (<code>ls -G</code> reads them). <code>CLICOLOR_FORCE=1</code> is how a user asks for color in a pipe.</td></tr>
+        <tr><td><b>gum</b> (Charm)</td><td class="k-bad">No, a Go binary</td><td class="k-bad">No</td><td>Styled boxes, spinners, and prompts. Good for tools whose users already have it, wrong for a bootstrap script.</td></tr>
+        <tr><td><b>Vendored bash libraries</b><br>e.g. fidian/ansi</td><td class="k-bad">No</td><td class="k-warn">Overkill</td><td>Drop-in function libraries for colors and cursor control. Vendoring one adds hundreds of lines to replace about twenty.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- MACOS -->
+<section class="ref">
+  <h2>Keeping it safe on macOS</h2>
+  <p class="col">macOS runs <code>install.sh</code> under <code>/bin/bash</code> 3.2 with BSD tools, in Terminal or iTerm2 with the user's own color theme. Each rule below is cheap to follow and shows up in one of the mockups.</p>
+  <div class="swatches" aria-label="Terminal.app ANSI colors, contrast against the Basic and Pro backgrounds">
+    <div class="sw"><span class="sw-name">red 31</span><span class="w" style="color:rgb(194,54,33)">5.5:1</span><span class="k" style="color:rgb(194,54,33)">3.8:1</span></div>
+    <div class="sw"><span class="sw-name">green 32</span><span class="w" style="color:rgb(37,188,36)">2.5:1</span><span class="k" style="color:rgb(37,188,36)">8.3:1</span></div>
+    <div class="sw"><span class="sw-name">yellow 33</span><span class="w" style="color:rgb(173,173,39)">2.4:1</span><span class="k" style="color:rgb(173,173,39)">8.8:1</span></div>
+    <div class="sw"><span class="sw-name">bright yellow</span><span class="w" style="color:rgb(234,236,35)">1.3:1</span><span class="k" style="color:rgb(234,236,35)">16.5:1</span></div>
+    <div class="sw"><span class="sw-name">blue 34</span><span class="w" style="color:rgb(73,46,225)">7.6:1</span><span class="k" style="color:rgb(73,46,225)">2.8:1</span></div>
+    <div class="sw"><span class="sw-name">magenta 35</span><span class="w" style="color:rgb(211,56,211)">4.0:1</span><span class="k" style="color:rgb(211,56,211)">5.3:1</span></div>
+    <div class="sw"><span class="sw-name">cyan 36</span><span class="w" style="color:rgb(51,187,200)">2.3:1</span><span class="k" style="color:rgb(51,187,200)">9.1:1</span></div>
+  </div>
+  <p class="cap col">Contrast of Terminal's ANSI colors on the Basic (white) and Pro (black) backgrounds. No hue reads well on both, which is why the mockups let the word carry the meaning and use color as a second cue.</p>
+  <div class="rules">
+    <div class="rule"><h3>Use the 16 basic colors only</h3><p>SGR 30–37 plus bold. They follow the user's theme (Solarized, Dracula, and so on). Avoid 256-color and 24-bit codes, which ignore the theme and which older Terminal versions do not render.</p></div>
+    <div class="rule"><h3>Never rely on bold yellow</h3><p>With "Use bright colors for bold text" on, bold yellow becomes bright yellow on white. Put meaning in the word (<code>warn</code>, <code>Warning</code>) and keep the hue on the label only.</p></div>
+    <div class="rule"><h3>Gate on the fd you write to</h3><p><code>curl | bash</code> pipes stdin, not stdout, so <code>[ -t 1 ]</code> still sees the terminal. Check <code>-t 2</code> for stderr lines. Also honor <code>NO_COLOR</code>, <code>TERM=dumb</code>, and <code>CLICOLOR_FORCE</code>.</p></div>
+    <div class="rule"><h3>Glyphs only in a UTF-8 locale</h3><p>Test <code>LC_ALL</code>, then <code>LC_CTYPE</code>, then <code>LANG</code> for UTF-8, and fall back to ASCII. Today's <code>━</code> rules print unconditionally.</p></div>
+    <div class="rule"><h3>Write bash 3.2</h3><p>No <code>declare -A</code>, <code>${x,,}</code>, <code>mapfile</code>, <code>&amp;&gt;&gt;</code>, <code>|&amp;</code>, <code>${a[-1]}</code>, or <code>printf '%(…)T'</code>. Under <code>set -u</code>, <code>"${arr[@]}"</code> on an empty array is an error in 3.2.</p></div>
+    <div class="rule"><h3>No cursor tricks or width probes</h3><p>Skip spinners, <code>\r</code> redraws, and <code>tput cols</code>. They garble logs and <code>$COLUMNS</code> is not exported to scripts. Keep lines under about 76 columns and rules at a fixed width.</p></div>
+    <div class="rule"><h3>Name the right startup file</h3><p>macOS defaults to zsh (<code>~/.zshrc</code>). Login bash on macOS reads <code>~/.bash_profile</code>; on Linux, <code>~/.bashrc</code>. Pick from <code>${SHELL##*/}</code> and <code>uname -s</code>, and print one exact line.</p></div>
+    <div class="rule"><h3>Use printf, not echo -e</h3><p><code>printf '%b'</code> behaves the same everywhere. <code>echo -e</code> and <code>echo -n</code> differ between bash, <code>sh</code>, and zsh's builtin.</p></div>
+  </div>
+  <h3 style="padding-top:10px">The whole helper, bash 3.2 safe</h3>
+  <div class="code"><pre><span class="c"># Color only for a terminal, and only when nobody opted out (no-color.org).</span>
+<span class="c"># CLICOLOR_FORCE asks for color even in a pipe (BSD/macOS convention).</span>
+_use_color() {
+    [ -n "${NO_COLOR:-}" ] &amp;&amp; return 1
+    [ -n "${CLICOLOR_FORCE:-}" ] &amp;&amp; [ "$CLICOLOR_FORCE" != 0 ] &amp;&amp; return 0
+    [ "${TERM:-dumb}" = dumb ] &amp;&amp; return 1
+    [ -t "${1:-1}" ]
+}
+
+<span class="c"># Glyphs only in a UTF-8 locale</span>
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) GLYPH_OK='✓' GLYPH_BAD='✗' ;;
+    *) GLYPH_OK='+' GLYPH_BAD='x' ;;
+esac
+
+<span class="c"># "  label   content", label colored when fd $3 (default 1) is a terminal</span>
+row() {
+    local label="$1" content="$2" fd="${3:-1}" code="${4:-2}" on="" off=""
+    if _use_color "$fd"; then on=$(printf '\033[%sm' "$code"); off=$(printf '\033[0m'); fi
+    printf '  %s%-8s%s%s\n' "$on" "$label" "$off" "$content" &gt;&amp;"$fd"
+}
+tilde() {
+    case "$1" in
+        "$HOME"/*) printf '~%s' "${1#"$HOME"}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+row fetch "stanza-$FETCH_VERSION.tar.gz"
+row warn  "$(tilde "$PREFIX/bin") is not on your PATH" 2 33
+row error "sha256 mismatch for $name; nothing was installed" 2 31
+row done  "stanza $FETCH_VERSION" 1 32</pre></div>
+</section>
+</div>
+
+<script>
+(function () {
+  var body = document.body;
+  function apply() {
+    var p = document.querySelector('input[name="profile"]:checked').value;
+    body.classList.toggle('pro', p === 'pro');
+    body.classList.toggle('plain', p === 'plain');
+    body.classList.toggle('bright', document.getElementById('o-bright').checked);
+    body.classList.toggle('ascii', document.getElementById('o-ascii').checked);
+  }
+  document.querySelectorAll('.bar input').forEach(function (el) { el.addEventListener('change', apply); });
+  apply();
+})();
+</script>
