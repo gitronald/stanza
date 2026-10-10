@@ -92,6 +92,11 @@ parse_args() {
                 ;;
             --version=*)
                 REQUESTED_VERSION="${1#*=}"
+                # Empty would read as "no version" and silently install latest
+                if [[ -z "$REQUESTED_VERSION" ]]; then
+                    error "--version requires a tag (e.g. --version=1.1.3)"
+                    exit 1
+                fi
                 shift
                 ;;
             --version)
@@ -250,7 +255,8 @@ fetch_release() {
 
     info "Downloading stanza v$FETCH_VERSION..."
     if command -v curl &> /dev/null; then
-        curl -fsSL --retry 2 -o "$archive" "$url" || {
+        # Refuse a redirect off HTTPS (GitHub serves archives via a redirect)
+        curl -fsSL --proto-redir '=https' --retry 2 -o "$archive" "$url" || {
             error "Download failed: $url"
             exit 1
         }
@@ -543,4 +549,7 @@ main() {
 
 # Run main function. Everything above only defines functions and variables,
 # so a truncated download (curl | bash cut off mid-stream) never gets here.
-main "$@"
+# The braces make bash read the whole line before running it: a cut inside
+# it is a syntax error, where a bare `main` cut before "$@" would run main
+# with the arguments dropped.
+{ main "$@"; }

@@ -157,6 +157,14 @@ out=$(piped --yes --version '../x' 2>&1) || status=$?
 assert_eq "exits non-zero" "1" "$status"
 assert_contains "rejects it" "$out" "Invalid version"
 
+echo "Empty version"
+setup
+status=0
+out=$(STANZA_VERSION=1.0.0 piped --yes --version= 2>&1) || status=$?
+assert_eq "--version= exits non-zero" "1" "$status"
+assert_contains "--version= asks for a tag" "$out" "--version requires a tag"
+assert_eq "--version= installs nothing" "none" "$(installed_version)"
+
 echo "Unreachable remote"
 setup
 status=0
@@ -195,16 +203,27 @@ last_line=$(tail -1 "$INSTALLER" | wc -c)
 ran=0
 for ((n = 1; n < size - last_line; n += 97)); do
     setup
-    head -c "$n" "$INSTALLER" | bash -s -- --yes > /dev/null 2>&1 || true
-    if [[ -e "$HOME/.local" ]]; then
+    out=$(head -c "$n" "$INSTALLER" | bash -s -- --yes 2>&1) || true
+    # main prints its banner first, so a cut that ran it shows up even when
+    # it then stopped short of installing (e.g. arguments lost, no --yes)
+    if [[ -e "$HOME/.local" || "$out" == *"Stanza CLI Tool Installer"* ]]; then
         ran=$((ran + 1))
-        echo "    installed after a cut at byte $n"
+        echo "    main ran after a cut at byte $n"
     fi
 done
-setup
-head -c $((size - last_line)) "$INSTALLER" | bash -s -- --yes > /dev/null 2>&1 || true
-[[ -e "$HOME/.local" ]] && ran=$((ran + 1))
-assert_eq "no truncated prefix installs anything" "0" "$ran"
+# Every cut within the final line, up to but not including its last
+# character, must not run main either (a bare `main` would run it argless)
+for ((n = size - last_line; n < size - 1; n++)); do
+    setup
+    out=$(head -c "$n" "$INSTALLER" | bash -s -- --yes 2>&1) || true
+    # main prints its banner first, so a cut that ran it shows up even when
+    # it then stopped short of installing (e.g. arguments lost, no --yes)
+    if [[ -e "$HOME/.local" || "$out" == *"Stanza CLI Tool Installer"* ]]; then
+        ran=$((ran + 1))
+        echo "    main ran after a cut at byte $n"
+    fi
+done
+assert_eq "no truncated prefix runs main" "0" "$ran"
 setup
 cat "$INSTALLER" | bash -s -- --yes > /dev/null 2>&1
 assert_eq "the whole script, piped the same way, installs" "1.10.0" "$(installed_version)"
