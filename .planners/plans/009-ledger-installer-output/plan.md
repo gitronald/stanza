@@ -1,7 +1,7 @@
 ---
 id: 9
 slug: ledger-installer-output
-status: active
+status: implemented
 branch: feature/ledger-installer-output
 created: 2026-10-10T13:53:07-07:00
 concluded:
@@ -229,3 +229,4 @@ And for a checksum mismatch (stderr):
   - Left alone: `print_branch_version` in `lib/stanza-release` prints
     ungated purple, but nothing calls it except a test that extracts it.
   - Checks: all of `tests/` passed (output-modes 50/50, install 110/110).
+- **2026-10-10T14:20:09-07:00** — Implemented: 11 commits ahead of `dev`.
