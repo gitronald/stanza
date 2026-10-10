@@ -235,7 +235,7 @@ elif [[ "$PUSH_ALL_BRANCHES" == true ]]; then
         print_warning "No branches found to push"
     else
         for branch in $branches; do
-            run_verbose git push -u origin "$branch"
+            run_verbose git_net push -u origin "$branch"
             PUSHED_BRANCH_COUNT=$((PUSHED_BRANCH_COUNT + 1))
         done
         # shellcheck disable=SC2001
@@ -243,7 +243,7 @@ elif [[ "$PUSH_ALL_BRANCHES" == true ]]; then
         print_row push "$PUSHED_BRANCHES  ($PUSHED_BRANCH_COUNT branches)"
     fi
 else
-    run_verbose git push -u origin "$CURRENT_BRANCH"
+    run_verbose git_net push -u origin "$CURRENT_BRANCH"
     PUSHED_BRANCHES="$CURRENT_BRANCH"
     PUSHED_BRANCH_COUNT=1
     print_row push "$CURRENT_BRANCH (current only)"
@@ -255,14 +255,14 @@ TAG_COUNT=0
 if git tag | grep -q .; then
     TAG_COUNT=$(git tag | wc -l | tr -d ' ')
     if [[ "$YES_TO_ALL" == "true" ]]; then
-        git push origin --tags >/dev/null 2>&1
+        run_captured git_net push origin --tags
         print_row tags "pushed ($TAG_COUNT tags)"
         TAGS_PUSHED=true
     else
         read -p "Push all tags to remote? (y/N): " -n 1 -r
         print_progress echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            git push origin --tags >/dev/null 2>&1
+            run_captured git_net push origin --tags
             print_row tags "pushed ($TAG_COUNT tags)"
             TAGS_PUSHED=true
         else

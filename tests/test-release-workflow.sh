@@ -111,6 +111,8 @@ source_release() {
     eval "$(extract_function git_merge_dev_into_main "$STANZA_DIR/lib/stanza-release")"
     eval "$(extract_function create_new_prerelease_cycle "$STANZA_DIR/lib/stanza-release")"
     eval "$(extract_function print_branch_version "$STANZA_DIR/lib/stanza-release")"
+    eval "$(extract_function step_start "$STANZA_DIR/lib/stanza-release")"
+    eval "$(extract_function step_done "$STANZA_DIR/lib/stanza-release")"
     BASE_BRANCH="main"
 }
 
@@ -139,6 +141,7 @@ case "$cmd" in
     sub="$1"; shift || true
     case "$sub" in
       create)
+        [[ ! -f "$STATE/create_fail" ]] || { echo "gh mock: could not create the pull request" >&2; exit 1; }
         title=""
         while [[ $# -gt 0 ]]; do
           case "$1" in
@@ -198,6 +201,7 @@ case "$cmd" in
         ;;
       merge)
         # Like GitHub's --merge: always a merge commit, honoring --subject.
+        [[ ! -f "$STATE/merge_fail" ]] || { echo "gh mock: the merge was refused" >&2; exit 1; }
         subject=""; match_head=""
         while [[ $# -gt 0 ]]; do
           case "$1" in
@@ -259,7 +263,85 @@ setup_remote_repo() {
 teardown_remote_repo() {
     [[ -n "$ORIG_PATH" ]] && PATH="$ORIG_PATH" && export PATH
     unset GH_MOCK_STATE
+    if [[ -n "${STALL_PID:-}" ]]; then
+        kill "$STALL_PID" 2>/dev/null || true
+        wait "$STALL_PID" 2>/dev/null || true
+        STALL_PID=""
+    fi
     cleanup
+}
+
+# Start a TCP server on 127.0.0.1 that accepts connections and never answers,
+# as a stalled HTTPS remote does. Sets STALL_PORT and STALL_PID (stopped by
+# teardown_remote_repo; the server also exits on its own after 60 seconds).
+# Returns 1 when uv is not available to run it.
+start_stall_server() {
+    command -v uv >/dev/null 2>&1 || return 1
+    cat > "$TEST_TMPDIR/stall.py" <<'PY'
+import socket, time
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(16)
+print(s.getsockname()[1], flush=True)
+s.settimeout(0.5)
+held = []
+end = time.time() + 60
+while time.time() < end:
+    try:
+        held.append(s.accept()[0])
+    except socket.timeout:
+        pass
+PY
+    uv run --no-project python "$TEST_TMPDIR/stall.py" > "$TEST_TMPDIR/stall.port" 2>/dev/null &
+    STALL_PID=$!
+    local _
+    for _ in $(seq 1 100); do
+        [[ -s "$TEST_TMPDIR/stall.port" ]] && break
+        sleep 0.1
+    done
+    STALL_PORT=$(cat "$TEST_TMPDIR/stall.port")
+    [[ -n "$STALL_PORT" ]]
+}
+
+# Refuse pushes on the bare remote with an update hook (per ref, as GitHub
+# branch protection does). The hook body is passed as the argument.
+remote_update_hook() {
+    printf '#!/bin/bash\n%s\nexit 0\n' "$1" > "$TEST_TMPDIR/remote.git/hooks/update"
+    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+}
+
+# Arm a failure in one release step of a full 'release patch' over the gh mock,
+# and print the error text that step's failure must show.
+arm_step_failure() {
+    case "$1" in
+        bump)
+            printf '#!/bin/bash\necho "pre-commit refuses" >&2\nexit 1\n' > .git/hooks/pre-commit
+            chmod +x .git/hooks/pre-commit
+            git config core.hooksPath "$PWD/.git/hooks"
+            echo "pre-commit refuses"
+            ;;
+        push)
+            remote_update_hook '[[ "$1" == refs/heads/dev ]] && { echo "dev is protected" >&2; exit 1; }'
+            echo "dev is protected"
+            ;;
+        pr)
+            touch "$GH_MOCK_STATE/create_fail"
+            echo "could not create the pull request"
+            ;;
+        merge)
+            touch "$GH_MOCK_STATE/merge_fail"
+            echo "the merge was refused"
+            ;;
+        tag)
+            remote_update_hook '[[ "$1" == refs/tags/* ]] && { echo "tags are refused" >&2; exit 1; }'
+            echo "tags are refused"
+            ;;
+        cycle)
+            # Refuse dev only once the release tag is on the remote: the cycle's push.
+            remote_update_hook '[[ "$1" == refs/heads/dev ]] && git rev-parse -q --verify refs/tags/v0.1.0 >/dev/null && { echo "dev is frozen" >&2; exit 1; }'
+            echo "dev is frozen"
+            ;;
+    esac
 }
 
 # --- Tests -----------------------------------------------------------------
@@ -682,12 +764,7 @@ test_no_pr_protected_base_pushes_nothing() {
 
     # An update hook refuses per ref, as GitHub branch protection does
     # (pre-receive would refuse the whole push and hide a non-atomic push).
-    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
-#!/bin/bash
-[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }
-exit 0
-HOOK
-    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+    remote_update_hook '[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }'
 
     local err exit_code=0
     err=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || exit_code=$?
@@ -710,12 +787,7 @@ test_no_pr_merge_phase_protected_skips_pr_create() {
     setup_remote_repo
 
     NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
-    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
-#!/bin/bash
-[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }
-exit 0
-HOOK
-    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+    remote_update_hook '[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }'
 
     local err exit_code=0
     err=$(NO_COLOR=1 "$STANZA" release merge -y --no-pr 2>&1) || exit_code=$?
@@ -766,19 +838,29 @@ test_pr_path_push_failure_hints_dev_cycle() {
     echo "PR release whose tag push is refused: the hint covers the dev cycle"
     setup_remote_repo
 
-    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
-#!/bin/bash
-[[ "$1" == refs/tags/* ]] && { echo "tags are refused" >&2; exit 1; }
-exit 0
-HOOK
-    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+    remote_update_hook '[[ "$1" == refs/tags/* ]] && { echo "tags are refused" >&2; exit 1; }'
 
     local err exit_code=0
     err=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || exit_code=$?
     assert_eq "exits non-zero" "1" "$exit_code"
     assert_contains "shows the remote's refusal" "$err" "remote: tags are refused"
     assert_contains "hints the retry" "$err" "git push --atomic origin main refs/tags/v0.1.0"
-    assert_contains "hints the dev cycle" "$err" "stanza release prerelease -y"
+    assert_contains "hints the resume" "$err" "git checkout dev && stanza release merge -y"
+    assert_contains "names the failed step" "$err" "  tag     failed; main has the release merge"
+    assert_not_contains "own hints replace the generic resume" "$err" "hint    resume:"
+
+    # The local tag is kept, so 'release merge' resumes: pushes it, runs the cycle.
+    rm "$TEST_TMPDIR/remote.git/hooks/update"
+    git checkout -q dev
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume pushes the tag" "$out" "v0.1.0  pushed (resumed)"
+    assert_eq "tag on the remote" "$(git rev-parse v0.1.0)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse v0.1.0 2>/dev/null)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "dev cycle pushed" "$(git rev-parse dev)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse dev)"
 
     teardown_remote_repo
 }
@@ -799,6 +881,232 @@ test_no_pr_ignored_flags_warn() {
     assert_contains "warns --pr-note is ignored" "$err" "--pr-note is ignored with --no-pr"
     assert_eq "release still tagged" "v0.1.0" "$(git tag -l v0.1.0)"
     teardown_remote_repo
+}
+
+# --- Failed steps and resume (plan 003) ------------------------------------
+
+test_failed_step_is_named() {
+    echo ""
+    echo "A failure in each release step names the step and keeps the error"
+    local step expect out json code row
+    for step in bump push pr merge tag cycle; do
+        setup_remote_repo
+        expect=$(arm_step_failure "$step")
+        code=0
+        out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+        row=$(printf '  %-8sfailed' "$step")
+        assert_eq "$step: exits 1" "1" "$code"
+        assert_contains "$step: prints the failed row" "$out" "$row"
+        assert_contains "$step: shows the captured error" "$out" "$expect"
+        teardown_remote_repo
+
+        setup_remote_repo
+        arm_step_failure "$step" >/dev/null
+        code=0
+        json=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null) || code=$?
+        assert_eq "$step --json: exits 1" "1" "$code"
+        assert_contains "$step --json: ok is false" "$json" '"ok":false'
+        assert_contains "$step --json: names the failed step" "$json" "\"failed_step\":\"$step\""
+        if command -v jq >/dev/null 2>&1; then
+            assert_eq "$step --json: stdout is one JSON document" "1" \
+                "$(printf '%s' "$json" | jq -s 'length' 2>/dev/null)"
+        fi
+        teardown_remote_repo
+    done
+}
+
+test_failed_step_json_fields() {
+    echo ""
+    echo "Failure JSON carries completed steps, the error, and the resume"
+    setup_remote_repo
+    arm_step_failure cycle >/dev/null
+    local json
+    json=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null) || true
+    assert_contains "completed steps in order" "$json" \
+        '"completed_steps":["bump","push","pr","merge","tag"]'
+    assert_contains "error names the failed call" "$json" '"error":"git push origin dev failed (exit 1)"'
+    assert_contains "resume is release merge" "$json" '"resume":"git checkout dev && stanza release merge -y"'
+    teardown_remote_repo
+
+    setup_remote_repo
+    arm_step_failure tag >/dev/null
+    json=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null) || true
+    assert_contains "own hints: resume is null" "$json" '"resume":null'
+    assert_contains "own hints are in hint" "$json" 'retry: git push --atomic origin main refs/tags/v0.1.0'
+    teardown_remote_repo
+
+    setup_remote_repo
+    git checkout -q -b feature
+    json=$(NO_COLOR=1 "$STANZA" --json release merge -y 2>/dev/null) || true
+    assert_contains "a refusal before any step is preflight" "$json" '"failed_step":"preflight"'
+    assert_contains "preflight error is recorded" "$json" '"error":"This operation should be performed on dev branch"'
+    if command -v jq >/dev/null 2>&1; then
+        assert_eq "preflight stdout is one JSON document" "1" \
+            "$(printf '%s' "$json" | jq -s 'length' 2>/dev/null)"
+    fi
+    teardown_remote_repo
+}
+
+test_cycle_push_failure_resumes() {
+    echo ""
+    echo "A refused dev-cycle push: release merge pushes the bump, then is a no-op"
+    setup_remote_repo
+    arm_step_failure cycle >/dev/null
+
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "release exits 1" "1" "$code"
+    assert_contains "says dev is advanced but not pushed" "$out" \
+        "cycle   failed; v0.1.0 is released; dev is advanced locally but not pushed"
+    assert_contains "hints the resume" "$out" "resume: git checkout dev && stanza release merge -y"
+    assert_contains "hints the push by hand" "$out" "or by hand: git checkout dev && git push origin dev"
+    assert_eq "dev bumped locally" "0.1.1a0" "$(cat VERSION)"
+
+    # A resume that fails at the same push still knows dev is advanced, and
+    # its by-hand hint does not bump a second time.
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "refused resume exits 1" "1" "$code"
+    assert_contains "refused resume says dev is advanced" "$out" \
+        "cycle   failed; v0.1.0 is released; dev is advanced locally but not pushed"
+    assert_not_contains "refused resume does not hint a second bump" "$out" "stanza release prerelease"
+    assert_eq "refused resume does not bump" "0.1.1a0" "$(cat VERSION)"
+
+    rm "$TEST_TMPDIR/remote.git/hooks/update"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume reports the release" "$out" "v0.1.0  already released; resuming"
+    assert_contains "resume pushes the advanced dev" "$out" "0.1.1a0 on dev (already advanced, pushed)"
+    assert_eq "resume does not bump again" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "dev pushed" "$(git rev-parse dev)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse dev)"
+
+    local before
+    before=$(git rev-parse dev)
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "second resume exits 0" "0" "$code"
+    assert_contains "second resume has nothing to do" "$out" "(already advanced, nothing to push)"
+    assert_eq "second resume leaves dev unchanged" "$before" "$(git rev-parse dev)"
+
+    teardown_remote_repo
+}
+
+test_resume_tag_fetch_failure_stops() {
+    echo ""
+    echo "Resume whose tag fetch fails stops there, without a re-tag hint"
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --no-dev-cycle >/dev/null 2>&1
+    git checkout -q dev
+    # The tag is on origin only, and a local v0.1.0/x ref blocks fetching it.
+    git tag -d v0.1.0 >/dev/null
+    git tag v0.1.0/x
+
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "exits 1" "1" "$code"
+    assert_contains "names the failed fetch" "$out" \
+        "git fetch origin refs/tags/v0.1.0:refs/tags/v0.1.0 failed"
+    assert_not_contains "does not go on to the tag step" "$out" "tag     failed"
+    assert_not_contains "does not hint re-tagging" "$out" "git tag v0.1.0"
+    teardown_remote_repo
+}
+
+test_subshell_error_reaches_json() {
+    echo ""
+    echo "An error printed inside a subshell reaches the failure JSON"
+    setup_remote_repo
+    rm VERSION
+    local json
+    json=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null) || true
+    assert_contains "failed in preflight" "$json" '"failed_step":"preflight"'
+    assert_contains "error carries the message" "$json" '"error":"No version file found'
+    teardown_remote_repo
+}
+
+test_prerelease_push_failure_warns() {
+    echo ""
+    echo "A refused prerelease push warns, keeps the remote's reason, and succeeds"
+    setup_remote_repo
+    remote_update_hook '[[ "$1" == refs/heads/dev ]] && { echo "dev is protected" >&2; exit 1; }'
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release prerelease -y 2>&1) || code=$?
+    assert_eq "exits 0" "0" "$code"
+    assert_contains "warns naming the push" "$out" "[WARNING] git push origin dev failed (exit 1)"
+    assert_contains "keeps the remote's reason" "$out" "remote: dev is protected"
+    assert_not_contains "prints no error" "$out" "[ERROR]"
+    teardown_remote_repo
+}
+
+test_stalled_fetch_stops_cycle() {
+    echo ""
+    echo "A stalled fetch in the dev cycle times out; release merge resumes it"
+    setup_remote_repo
+    if ! start_stall_server; then
+        echo "  SKIP: uv is not available to run the stall server"
+        teardown_remote_repo
+        return 0
+    fi
+
+    # Once the tag reaches origin, fetches go to the stalled server; pushes still
+    # reach the bare remote. The cycle's 'git pull origin dev' is the first fetch.
+    local work="$PWD"
+    cat > "$TEST_TMPDIR/remote.git/hooks/post-receive" <<HOOK
+#!/bin/bash
+grep -q ' refs/tags/' || exit 0
+unset GIT_DIR GIT_WORK_TREE
+git --git-dir="$work/.git" config remote.origin.pushurl "$TEST_TMPDIR/remote.git"
+git --git-dir="$work/.git" config remote.origin.url "http://127.0.0.1:$STALL_PORT/stalled.git"
+HOOK
+    chmod +x "$TEST_TMPDIR/remote.git/hooks/post-receive"
+
+    local out code=0 start elapsed
+    start=$(date +%s)
+    out=$(STANZA_NET_STALL_SECONDS=2 NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    elapsed=$(( $(date +%s) - start ))
+    assert_eq "stalled run exits non-zero" "yes" "$([[ $code -ne 0 ]] && echo yes || echo no)"
+    assert_eq "gives up within the stall window (${elapsed}s)" "yes" \
+        "$([[ $elapsed -lt 20 ]] && echo yes || echo no)"
+    assert_contains "shows git's stall error" "$out" "Operation too slow"
+    assert_contains "names the stalled call" "$out" "git pull origin dev failed"
+    assert_contains "names the cycle step" "$out" "cycle   failed; v0.1.0 is released; dev is not advanced"
+    assert_contains "hints the resume" "$out" "resume: git checkout dev && stanza release merge -y"
+    assert_eq "tag reached the remote" "$(git rev-parse v0.1.0)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse v0.1.0 2>/dev/null)"
+    assert_eq "dev not advanced" "0.1.0" "$(cat VERSION)"
+
+    # The network is back: one command finishes the cycle.
+    rm "$TEST_TMPDIR/remote.git/hooks/post-receive"
+    git config --unset remote.origin.pushurl
+    git config remote.origin.url "$TEST_TMPDIR/remote.git"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume runs the cycle" "$out" "0.1.1a0 on dev (merged main back, pushed)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "dev cycle pushed" "$(git rev-parse dev)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse dev)"
+    assert_contains "back-merge carries the release" \
+        "$(git log --format=%s dev)" "Merge branch 'main' into dev"
+
+    teardown_remote_repo
+}
+
+test_local_cycle_resume() {
+    echo ""
+    echo "--local: release merge resumes a release whose tag exists"
+    setup_repo
+    NO_COLOR=1 "$STANZA" release patch -y --local --no-dev-cycle >/dev/null 2>&1
+    git checkout -q dev
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y --local 2>&1) || code=$?
+    assert_eq "local resume exits 0" "0" "$code"
+    assert_contains "local resume names the tag" "$out" "v0.1.0  already released; resuming"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(uv version --short)"
+    assert_eq "dev carries the release" "yes" \
+        "$(git merge-base --is-ancestor v0.1.0 dev && echo yes || echo no)"
+    cleanup
 }
 
 # --- Run -------------------------------------------------------------------
@@ -926,6 +1234,14 @@ test_no_pr_merge_phase_protected_skips_pr_create
 test_no_pr_diverged_base_hint
 test_no_pr_ignored_by_prerelease
 test_pr_path_push_failure_hints_dev_cycle
+test_failed_step_is_named
+test_failed_step_json_fields
+test_cycle_push_failure_resumes
+test_resume_tag_fetch_failure_stops
+test_subshell_error_reaches_json
+test_prerelease_push_failure_warns
+test_stalled_fetch_stops_cycle
+test_local_cycle_resume
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

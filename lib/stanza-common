@@ -113,9 +113,13 @@ print_done() {
 
 # Print a hint row to stderr (remediation suggestion).
 # Color decision uses the stderr TTY since output goes there.
+# Hints since the last print_error are kept in STANZA_HINTS, so an exit trap
+# can tell an error that named its own remedy from one that did not.
 # Usage: print_hint "git status --porcelain"
+STANZA_HINTS=""
 print_hint() {
     local content="$1"
+    STANZA_HINTS="${STANZA_HINTS:+$STANZA_HINTS$'\n'}$content"
     [[ "$JSON_OUTPUT" == "true" ]] && return 0
     printf "  %b%-${LABEL_WIDTH}s%b%s\n" \
         "$(should_use_color 2 && echo -n "$CYAN")" \
@@ -229,7 +233,17 @@ print_warning() {
 
 # Print error message with standard format.
 # Accepts an optional second argument for a hint line.
+# Records the message in STANZA_LAST_ERROR and clears STANZA_HINTS. When
+# STANZA_ERROR_LOG names a file, the message is also written there, so an error
+# printed inside $(...) still reaches the caller's exit trap.
+STANZA_LAST_ERROR=""
+STANZA_ERROR_LOG=""
 print_error() {
+    STANZA_LAST_ERROR="$1"
+    STANZA_HINTS=""
+    if [[ -n "$STANZA_ERROR_LOG" ]]; then
+        printf '%s' "$1" > "$STANZA_ERROR_LOG" 2>/dev/null || true
+    fi
     if should_use_color 2; then
         printf "%b[ERROR]%b %s\n" "$RED" "$NC" "$1" >&2
     else
@@ -237,6 +251,13 @@ print_error() {
     fi
     [[ -n "${2:-}" ]] && print_hint "$2"
     return 0
+}
+
+# Print a failed command's captured output to stderr, indented under the error
+# line above it. No-op for empty output.
+print_output() {
+    [[ -n "${1:-}" ]] || return 0
+    printf '%s\n' "$1" | sed 's/^/    /' >&2
 }
 
 # ------------------------------------------------------------------------------
@@ -654,7 +675,7 @@ require_branch() {
 
     if [ "$current_branch" != "$required_branch" ]; then
         print_error "This operation should be performed on $required_branch branch"
-        echo "Current branch is $current_branch."
+        echo "Current branch is $current_branch." >&2
         exit 1
     fi
 }
@@ -663,7 +684,7 @@ require_branch() {
 check_uncommitted_changes() {
     if ! git diff-index --quiet HEAD --; then
         print_error "Uncommitted changes, commit or stash them first."
-        git status --porcelain
+        git status --porcelain >&2
         exit 1
     fi
 }
@@ -677,7 +698,7 @@ check_not_protected_branch() {
     for protected in "${protected_branches[@]}"; do
         if [ "$current_branch" = "$protected" ]; then
             print_error "Prerelease versions cannot be bumped on protected branch: $current_branch"
-            echo "Please switch to a development or feature branch."
+            echo "Please switch to a development or feature branch." >&2
             exit 1
         fi
     done
@@ -697,7 +718,7 @@ get_branch_status() {
     fi
 
     # Fetch remote branch quietly
-    if ! git fetch origin "$branch" 2>/dev/null; then
+    if ! git_net fetch origin "$branch" >/dev/null 2>&1; then
         echo "error"
         return 1
     fi
@@ -720,8 +741,10 @@ check_branch_up_to_date() {
         echo "Checking if $branch branch is up to date..."
     fi
     # Fetch remote branch
-    if ! git fetch origin "$branch" 2>/dev/null; then
+    local fetch_out
+    if ! fetch_out=$(git_net fetch origin "$branch" 2>&1); then
         print_error "Could not fetch from origin/$branch"
+        print_output "$fetch_out"
         exit 1
     fi
 
@@ -792,24 +815,121 @@ should_skip_remote() {
     return 1  # Don't skip remote (false)
 }
 
-# Run git command with output control based on verbose flag
-# Usage: git_quiet push origin main
-git_quiet() {
-    if [[ "$VERBOSE" == "true" ]]; then
-        print_progress git "$@"
-    else
-        git "$@" > /dev/null 2>&1
+# ------------------------------------------------------------------------------
+# Network git calls
+#
+# git waits on a stalled HTTPS transfer for as long as the connection stays
+# open: http.lowSpeedLimit and http.lowSpeedTime are unset by default. git_net
+# runs git with both set, so a transfer below STANZA_NET_STALL_BYTES bytes/s for
+# STANZA_NET_STALL_SECONDS (default 30) aborts. A value the user configured wins:
+# http.lowSpeed* in git config is left alone, and GIT_HTTP_LOW_SPEED_LIMIT/_TIME
+# in the environment override any config. For SSH remotes it adds ServerAlive
+# keepalives through core.sshCommand, unless the user already chose an ssh
+# command (core.sshCommand, GIT_SSH, or GIT_SSH_COMMAND).
+# STANZA_NET_STALL_SECONDS=0 turns all of it off.
+#
+# Every git call that talks to a remote (fetch, pull, push, ls-remote) goes
+# through git_net, directly or through git_quiet.
+STANZA_NET_STALL_BYTES=1000
+
+git_net() {
+    local stall="${STANZA_NET_STALL_SECONDS:-30}"
+    [[ "$stall" =~ ^[0-9]+$ ]] || stall=30
+    stall=$((10#$stall))  # 08 is eight seconds, not an octal error
+    local opts=()
+    if [[ "$stall" -gt 0 ]]; then
+        git config --get http.lowSpeedLimit >/dev/null 2>&1 \
+            || opts+=(-c "http.lowSpeedLimit=$STANZA_NET_STALL_BYTES")
+        git config --get http.lowSpeedTime >/dev/null 2>&1 \
+            || opts+=(-c "http.lowSpeedTime=$stall")
+        if [[ -z "${GIT_SSH_COMMAND:-}" && -z "${GIT_SSH:-}" ]] \
+            && ! git config --get core.sshCommand >/dev/null 2>&1; then
+            opts+=(-c "core.sshCommand=ssh -o ServerAliveInterval=$(( (stall + 1) / 2 )) -o ServerAliveCountMax=2")
+        fi
     fi
+    git "${opts[@]}" "$@"
 }
 
-# Run gh command with output control based on verbose flag
+# Run git with output control based on verbose flag. Remote subcommands go
+# through git_net. On failure the command's output is printed (see quiet_run).
+# Usage: git_quiet push origin main
+git_quiet() {
+    case "${1:-}" in
+        fetch|pull|push|ls-remote) quiet_run git_net "$@" ;;
+        *)                         quiet_run git "$@" ;;
+    esac
+}
+
+# Run gh with output control based on verbose flag (see quiet_run).
 # Usage: gh_quiet pr merge "$PR_NUMBER" --merge
 gh_quiet() {
-    if [[ "$VERBOSE" == "true" ]]; then
-        print_progress gh "$@"
+    quiet_run gh "$@"
+}
+
+# Run a command with its output hidden unless VERBOSE (-vv). When it fails,
+# print an error naming the command, then everything it printed: under set -e
+# the run ends at this call, and the reason must not be discarded with it.
+# Successful calls stay quiet.
+quiet_run() {
+    run_reported error "$VERBOSE" "$@"
+}
+
+# quiet_run for a call whose failure the caller recovers from (a push it
+# reports as not done, an optional edit): the failure is reported as a warning,
+# not an error, and STANZA_LAST_ERROR is left alone.
+quiet_try() {
+    run_reported warning "$VERBOSE" "$@"
+}
+
+# Run a command with stdout and stderr captured; on failure print an error
+# naming the command, followed by the captured output. Returns its status.
+run_captured() {
+    run_reported error false "$@"
+}
+
+# Run a command with its output shown live when SHOW is true and captured
+# otherwise. On failure print an [ERROR] (a [WARNING] at LEVEL warning) naming
+# the command, then any captured output. Returns the command's status.
+# Usage: run_reported error|warning true|false cmd [args...]
+run_reported() {
+    local level="$1" show="$2" out="" status=0
+    shift 2
+    if [[ "$show" == "true" ]]; then
+        print_progress "$@" || status=$?
     else
-        gh "$@" > /dev/null 2>&1
+        out=$("$@" 2>&1) || status=$?
     fi
+    [[ $status -ne 0 ]] || return 0
+    local message
+    message="$(command_label "$@") failed (exit $status)"
+    if [[ "$level" == "warning" ]]; then
+        # Warnings are silent under --json (see print_warning); so is the output.
+        [[ "$JSON_OUTPUT" != "true" ]] || return $status
+        print_warning "$message"
+    else
+        print_error "$message"
+    fi
+    print_output "$out"
+    return $status
+}
+
+# A command as a one-line label for error messages: git_net shows as git,
+# arguments with spaces are quoted, newlines are flattened, and the result is
+# cut at 100 characters.
+command_label() {
+    local label="$1" arg
+    [[ "$label" == "git_net" ]] && label="git"
+    shift
+    for arg in "$@"; do
+        arg="${arg//$'\n'/ }"
+        if [[ -z "$arg" || "$arg" == *" "* ]]; then
+            label="$label \"$arg\""
+        else
+            label="$label $arg"
+        fi
+    done
+    [[ ${#label} -gt 100 ]] && label="${label:0:97}..."
+    printf '%s' "$label"
 }
 
 # Route human output without interfering with commands that return data.
@@ -821,13 +941,14 @@ print_progress() {
     fi
 }
 
-# Init shows command output from the first verbose tier.
+# Init shows command output from the first verbose tier. Below it, output is
+# captured and printed only if the command fails.
 run_verbose() {
+    local show=false
     if [[ "$VERBOSITY" -ge 2 ]]; then
-        print_progress "$@"
-    else
-        "$@" >/dev/null 2>&1
+        show=true
     fi
+    run_reported error "$show" "$@"
 }
 
 # User confirmation with customizable exit message
