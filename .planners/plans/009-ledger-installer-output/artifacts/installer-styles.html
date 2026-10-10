@@ -392,7 +392,7 @@ Continue? [Y/n] y
       <h4>Trade-offs</h4>
       <ul>
         <li><span class="k-ok">One voice:</span> first contact looks like the tool you just installed.</li>
-        <li><span class="k-ok">Short run:</span> 16 lines for the same install, against 49 today.</li>
+        <li><span class="k-ok">Short run:</span> 18 lines for the same install, against 49 today, with every installed file named.</li>
         <li><span class="k-warn">Duplicated helper:</span> <code>curl | bash</code> cannot source <code>lib/stanza-common</code> before the download, so <code>install.sh</code> carries its own 20-line copy of <code>print_row</code> and the color gate.</li>
       </ul>
     </div>
@@ -405,21 +405,24 @@ Continue? [Y/n] y
   <i class="d">source  </i>github.com/gitronald/stanza, release v1.2.1
   <i class="d">bin     </i>~/.local/bin/stanza
   <i class="d">lib     </i>~/.local/lib/stanza
-  <i class="d">extras  </i>zsh and bash completions, Claude Code rule
+  <i class="d">bash    </i>~/.local/share/bash-completion/completions/stanza
+  <i class="d">zsh     </i>~/.local/share/zsh/site-functions/_stanza
+  <i class="d">rule    </i>~/.claude/rules/stanza.md
 
   Install stanza 1.2.1? [Y/n] y
 
   <i class="d">fetch   </i>stanza-1.2.1.tar.gz
   <i class="d">verify  </i>sha256 3f9a0c51d2e7b8a4
-  <i class="d">files   </i>~/.local/bin, ~/.local/lib/stanza
-  <i class="d">shell   </i>zsh and bash completions
+  <i class="d">files   </i>~/.local/bin/stanza, ~/.local/lib/stanza
+  <i class="d">bash    </i>~/.local/share/bash-completion/completions/stanza
+  <i class="d">zsh     </i>~/.local/share/zsh/site-functions/_stanza
   <i class="d">rule    </i>~/.claude/rules/stanza.md
   <i class="f3">warn    </i>~/.local/bin is not on your PATH
   <i class="f6">hint    </i>echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
   <i class="f2">done    </i>stanza 1.2.1. Open a new terminal, then run: stanza --help
 </pre>
       </div>
-      <div class="cap">Fresh install. Paths under <code>$HOME</code> print as <code>~</code>.</div>
+      <div class="cap">Fresh install. Every file is named by its full path, before the prompt and as it lands; paths under <code>$HOME</code> print as <code>~</code>. When a completion falls back to <code>~/.zsh/completions</code> or <code>~/.bash_completion.d</code>, its row shows that path and a <code>hint</code> row gives the line to add.</div>
     </div>
     <div class="figure">
       <div class="term"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span>~ — bash — 80×24</span></div>

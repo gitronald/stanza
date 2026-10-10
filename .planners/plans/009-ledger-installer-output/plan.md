@@ -49,14 +49,17 @@ stanza install  (v1.2.1, ~/.local)
   source  github.com/gitronald/stanza, release v1.2.1
   bin     ~/.local/bin/stanza
   lib     ~/.local/lib/stanza
-  extras  zsh and bash completions, Claude Code rule
+  bash    ~/.local/share/bash-completion/completions/stanza
+  zsh     ~/.local/share/zsh/site-functions/_stanza
+  rule    ~/.claude/rules/stanza.md
 
   Install stanza 1.2.1? [Y/n] y
 
   fetch   stanza-1.2.1.tar.gz
   verify  sha256 3f9a0c51d2e7b8a4
-  files   ~/.local/bin, ~/.local/lib/stanza
-  shell   zsh and bash completions
+  files   ~/.local/bin/stanza, ~/.local/lib/stanza
+  bash    ~/.local/share/bash-completion/completions/stanza
+  zsh     ~/.local/share/zsh/site-functions/_stanza
   rule    ~/.claude/rules/stanza.md
   warn    ~/.local/bin is not on your PATH
   hint    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
@@ -102,14 +105,26 @@ And for a checksum mismatch (stderr):
    it can source `lib/stanza-common` instead of copying.
 2. **install.sh.** Replace `info`/`success`/`warn`/`error` call sites with
    rows: one row per step, no start/done pairs. Collapse the configuration
-   block into `source`/`bin`/`lib`/`extras`. Rewrite the end: drop the banner,
+   block into `source`/`bin`/`lib`/`bash`/`zsh`/`rule`. Every installed file
+   is spelled out by its full path, both in the pre-prompt block and in the
+   step rows, never summarized as "completions" or "Claude Code rule". The
+   pre-prompt block resolves the same destination the install step will use:
+   the `$PREFIX/share/...` completion directories when writable, otherwise
+   `~/.bash_completion.d/stanza` and `~/.zsh/completions/_stanza`. A row is
+   omitted when its file will not be installed (`--no-completions`,
+   `--no-rules`, `~/.claude` missing, a system install), and the `rule` row
+   is followed by a `hint` naming `stanza rules install` when skipped for a
+   reason the user can change. Rewrite the end: drop the banner,
    "Installation details", and "Next steps" in favor of the `warn`/`hint`
    PATH rows (only when needed) and one `done` row.
 3. **Shell-aware PATH hint.** Pick the startup file from `${SHELL##*/}` and
    `uname -s`: zsh -> `~/.zshrc`; bash -> `~/.bash_profile` on Darwin,
    `~/.bashrc` elsewhere; fish -> `fish_add_path ~/.local/bin`; anything else
    falls back to naming the export line. Same treatment for the completion
-   hints (`fpath`, `~/.bash_completion.d`) when the fallback paths are used.
+   hints when the fallback paths are used: a `hint` row after the `zsh` row
+   gives `fpath=(~/.zsh/completions $fpath)` for `~/.zshrc`, and one after the
+   `bash` row gives the `~/.bash_completion.d` source loop for the bash
+   startup file.
 4. **Errors.** Every `error` row says whether anything was installed and is
    followed by a `hint` row with the next step, matching `print_hint`.
 5. **`--no-color`.** Add the flag to `install.sh` and `uninstall.sh` for
