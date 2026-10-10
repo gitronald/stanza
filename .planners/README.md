@@ -3,6 +3,8 @@
 | # | Plan | Status | Concluded | PR |
 |---|---|---|---|---|
 | 003 | [Time out stalled git calls and name the failed release step](plans/003-harden-release-network-steps/plan.md) | implemented | — | [#8](https://github.com/gitronald/stanza/pull/8) |
+| 003 | [Time out stalled git calls and name the failed release step](plans/003-harden-release-network-steps/plan.md) | active | — | — |
+| 007 | [Resume a release that stopped before its tag](plans/007-resume-earlier-release-steps/plan.md) | draft | — | — |
 | 006 | [Research porting stanza to a Python uv tool](plans/006-python-uv-port/plan.md) | draft | — | — |
 | 005 | [Add CI with an output-mode matrix and a bash 3.2 job](plans/005-ci-output-contract/plan.md) | draft | — | — |
 | 004 | [Check release preconditions before the first mutation](plans/004-release-preflight/plan.md) | draft | — | — |
