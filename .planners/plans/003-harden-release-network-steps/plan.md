@@ -1,10 +1,10 @@
 ---
 id: 3
 slug: harden-release-network-steps
-status: implemented
+status: done
 branch: feature/harden-release-network-steps
 created: 2026-10-09T17:17:19-07:00
-concluded:
+concluded: 2026-10-09T23:01:35-07:00
 pr: https://github.com/gitronald/stanza/pull/8
 ---
 
@@ -147,22 +147,98 @@ recovery a single command. Item 5 is for callers.
     stalled SSH server (the test only checks that git hands the options to
     ssh), and a run against real GitHub.
 - **2026-10-09T21:58:07-07:00** — Implemented: 5 commits ahead of `dev`.
+- **2026-10-09T23:02:35-07:00** — Review follow-up (`96f9d8e`, `1ff204a`).
+  `/code-review` at medium on PR #8 (2 finders, 5 verifiers): 13 findings, 8
+  confirmed and 5 plausible; 6 candidates rejected. Posted to the PR. All 7
+  suites pass (607 tests; 24 new assertions).
+  - **Actioned, each with a regression test:**
+    - A failed tag fetch in `find_shipped_release` was ignored: the function
+      runs as an `if` condition, so set -e is off in its body, and the resume
+      went on to a `tag` failure hinting `git tag vX main`. The fetch now exits
+      (`test_resume_tag_fetch_failure_stops`).
+    - A resumed run that failed at the cycle push said "dev is not advanced"
+      and hinted a second prerelease bump, because `CYCLE_BUMPED` was set only
+      by the run that bumped. Renamed `DEV_ADVANCED` and set whenever the cycle
+      finds dev on a prerelease (`test_cycle_push_failure_resumes`).
+    - `STANZA_NET_STALL_SECONDS=08` was read as octal: the `[[ -gt ]]` erred as
+      false and git_net added no options. Normalized with `10#`
+      (`test_stall_seconds_env`).
+    - The failure JSON's `error` was null for a `print_error` inside `$(...)`
+      (e.g. no version file). `print_error` also writes a per-run
+      `STANZA_ERROR_LOG`, which `step_start` clears and the exit trap reads and
+      removes (`test_subshell_error_reaches_json`).
+    - Recoverable calls (the prerelease push, the `--pr-note` edit) printed
+      `[ERROR]` on a run that exits 0. A new `quiet_try` reports them as a
+      warning; every wrapper now goes through one `run_reported`
+      (`test_prerelease_push_failure_warns`, `test_quiet_try_warns`).
+    - `run_verbose -v` never named a failed command; it shares `run_reported`
+      now (`test_verbose_failure_is_named`).
+    - The three inline remote update hooks in `tests/test-release-workflow.sh`
+      use `remote_update_hook`.
+    - The README lists `hint` among the failure fields. README and guide say to
+      raise `STANZA_NET_STALL_SECONDS` for a remote that stays silent while it
+      works: curl counts silence, and git's keepalives are far below 1000 B/s.
+  - **Conscious no-ops:**
+    - A `--local` release resumed later against the remote dies on a
+      non-fast-forward `fetch origin main:main`, and its hint repeats the
+      command. Outside the supported flow; carried to plan 007 (case 3).
+    - The `ls-remote` arm of `git_quiet` has no caller. Kept, so a future
+      caller stays under git_net's bounds.
+    - `STANZA_NET_STALL_BYTES` keeps its name: the prefix also marks internal
+      state (`STANZA_LAST_ERROR`, `STANZA_HINTS`), and no doc names it a knob.
+    - `check_branch_up_to_date` keeps its own fetch report; `git_quiet` would
+      change the message and stream the fetch at `-vv`.
+  - **Rejected by verification:** repeated `get_current_version` reads, the
+    duplicate tag-push resume hint, the recipes in `release_failure_advice`,
+    repeated `git config` spawns, and `--json -vv` stdout from
+    `git_tag_version` (pre-existing on `dev`; see Handoff).
+  - Merged `dev` (plan 007's add) into the branch, so the index does not
+    conflict on GitHub.
 
 ## Handoff
 
-State: implemented and pushed on `feature/harden-release-network-steps`; PR
-#8 waits on review. Nothing is uncommitted.
+State: closed. The implementation, review fixes, and docs are on
+`feature/harden-release-network-steps` and merge into `dev` through PR #8.
+Nothing is uncommitted.
 
-Open questions (not blocking review):
+Questions:
 
 1. Should a merge-step failure after the PR has merged (no tag yet) resume
-   automatically? It would need to find the PR's merge commit on the base
-   branch (the merge whose second parent is dev's head) and tag it. Today the
-   hint does it by hand.
+   automatically? Handed to plan 007, case 1 (2026-10-09).
 2. Should `stanza release pr` resume after a failed `push` or `pr` step (dev
-   already on the stable version, no open PR)? Today the hints give the
-   commands.
-3. For plan 004: its proposed `{"ok":false,"phase":"preflight",...}` clashes
-   with the existing `phase` field (`pr`/`merge`). This plan already emits
-   `"failed_step":"preflight"` for refusals before the first step; 004 can add
-   its `errors` array to that document.
+   already on the stable version, no open PR)? Handed to plan 007, case 2
+   (2026-10-09).
+3. Plan 004's proposed `{"ok":false,"phase":"preflight",...}` clashes with the
+   existing `phase` field (`pr`/`merge`). Handed to plan 004 (2026-10-09): this
+   plan emits `"failed_step":"preflight"` for refusals before the first step,
+   and 004 can add its `errors` array to that document.
+
+Not verified:
+
+- bash 3.2 (no 3.2 on this host; plan 005 adds the CI job).
+- ShellCheck (not installed here).
+- SSH keepalives against a live stalled SSH server (the test checks only that
+  git hands the options to ssh).
+- A run against real GitHub.
+- Known and pre-existing on `dev`: under `--json -vv`, `git_tag_version` prints
+  the tag push output on stdout ahead of the JSON document. Plan 005's
+  output-mode matrix is where a test would catch it.
+
+## Retrospective
+
+- The five items landed as specified. The one change of mechanism was an EXIT
+  trap in place of an ERR trap: ERR is not inherited by functions without
+  `set -E`, and it misses the explicit `exit 1` paths.
+- State that a failure report depends on cannot live in a per-process flag.
+  `CYCLE_BUMPED` and `STANZA_LAST_ERROR` were both lost in exactly the cases
+  this plan is about (a resumed run, an error inside `$(...)`). Derive it from
+  the repo, or carry it through a file.
+- Calling a function as an `if` condition turns off `set -e` for its whole
+  body, with no sign of it. A function used that way needs an explicit
+  `|| exit` on every call that can fail.
+- Capturing output so failures are reported made every caught failure an
+  `[ERROR]`, including those the caller recovers from. A reporting wrapper
+  needs a severity, not only a capture.
+- The stall test (a TCP server that accepts and never answers, with origin's
+  fetch URL repointed by a post-receive hook) reproduced the original incident
+  in about 2 seconds. Plan 007's tests can reuse the pattern.
