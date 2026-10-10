@@ -752,10 +752,22 @@ gh_merge_pr() {
     RELEASE_PR_NUMBER="$pr_number"
 
     # Refuse to merge if dev moved past the reviewed PR head.
-    local pr_head dev_head
-    pr_head=$(gh pr view "$RELEASE_PR_NUMBER" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)
-    dev_head=$(git rev-parse dev 2>/dev/null || true)
-    if [[ -n "$pr_head" && -n "$dev_head" && "$pr_head" != "$dev_head" ]]; then
+    local pr_head dev_head pr_info pr_base pr_state
+    pr_info=$(gh pr view "$RELEASE_PR_NUMBER" --json headRefOid,baseRefName,state \
+        --jq '[.headRefOid, .baseRefName, .state] | join("|")' 2>/dev/null) || pr_info=""
+    IFS='|' read -r pr_head pr_base pr_state <<< "$pr_info"
+    dev_head=$(git rev-parse --verify dev 2>/dev/null) || dev_head=""
+    if [[ -z "$pr_head" || -z "$dev_head" ]]; then
+        print_error "Could not verify PR #$RELEASE_PR_NUMBER head against dev" \
+            "check GitHub access and the local dev branch, then retry"
+        exit 1
+    fi
+    if [[ "$pr_state" != "OPEN" || "$pr_base" != "$BASE_BRANCH" ]]; then
+        print_error "PR #$RELEASE_PR_NUMBER must be OPEN and target $BASE_BRANCH" \
+            "select the open release PR from dev to $BASE_BRANCH"
+        exit 1
+    fi
+    if [[ "$pr_head" != "$dev_head" ]]; then
         print_error "dev has advanced past PR #$RELEASE_PR_NUMBER head; merge would ship unreviewed commits" \
             "re-run 'stanza release pr <type>' to refresh the PR"
         exit 1
@@ -764,6 +776,7 @@ gh_merge_pr() {
     RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
     confirm_step "2: Merge PR #$RELEASE_PR_NUMBER from dev into $BASE_BRANCH"
     gh_quiet pr merge "$RELEASE_PR_NUMBER" --merge \
+        --match-head-commit "$pr_head" \
         --subject "version [release]: $version_tag - PR #$RELEASE_PR_NUMBER" --body ""
     git_quiet checkout "$BASE_BRANCH"
     git_quiet pull origin "$BASE_BRANCH"
@@ -866,8 +879,13 @@ json_set_pr_field() {
     fi
 }
 
-# Prerequisites checks
-check_required_commands
+# Prerequisites checks. gh is needed only where the PR path calls it, the
+# same condition as the auth check below.
+if [[ "$BUMP_TYPE" != "prerelease" ]] && release_uses_pr; then
+    check_required_commands
+else
+    check_required_commands --without-gh
+fi
 check_git_remote_status
 
 # For prerelease: ensure not on protected branch
@@ -976,14 +994,25 @@ case "$PHASE" in
 
     merge)
         # Phase 2: merge the open PR (or merge dev directly), tag, new cycle.
+        require_branch "dev"
         check_uncommitted_changes
+        version_tag="v$(get_current_version)"
+        if [[ "$PROJECT_TYPE_DETECTED" == "latex" ]]; then
+            validate_latex_version_string "${version_tag#v}"
+        else
+            validate_version_string "${version_tag#v}"
+        fi
         if release_uses_pr; then
-            # Derive the tag from the target PR's title; fall back to current.
+            # The release PR title must agree with the version on dev.
             _merge_pr="${MERGE_PR_NUMBER:-$(gh_get_last_open_pr_number)}"
             if [[ -n "$_merge_pr" ]]; then
-                version_tag=$(gh pr view "$_merge_pr" --json title --jq '.title' 2>/dev/null || true)
+                pr_title=$(gh pr view "$_merge_pr" --json title --jq '.title' 2>/dev/null || true)
+                if [[ "$pr_title" != "$version_tag" ]]; then
+                    print_error "PR #$_merge_pr title does not match $version_tag" \
+                        "PR title must be the release tag: $version_tag"
+                    exit 1
+                fi
             fi
-            [[ -z "${version_tag:-}" ]] && version_tag="v$(get_current_version)"
             gh_merge_pr "$version_tag" "$MERGE_PR_NUMBER"
         else
             # A direct merge cannot tell whether a pr phase promoted the version;
@@ -995,10 +1024,8 @@ case "$PHASE" in
             fi
             # --no-pr merges the local dev; it must match what the pr phase pushed.
             if ! should_skip_remote; then
-                require_branch "dev"
                 check_branch_up_to_date "dev"
             fi
-            version_tag="v$(get_current_version)"
             git_merge_dev_into_main "$version_tag"
         fi
         git_tag_version "$version_tag"

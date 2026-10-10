@@ -255,12 +255,15 @@ check_command_availability() {
 
 # Standard prerequisites check for release scripts
 # Only requires uv for uv projects; git and gh are always required
+# Pass --without-gh when the run makes no gh calls (e.g. a --local release).
 check_required_commands() {
     check_command_availability git
     if [[ "$(detect_project_type)" == "uv" ]]; then
         check_command_availability uv
     fi
-    check_command_availability gh
+    if [[ "${1:-}" != "--without-gh" ]]; then
+        check_command_availability gh
+    fi
 }
 
 # ------------------------------------------------------------------------------
