@@ -5,7 +5,7 @@ status: active
 branch: feature/curl-installer
 created: 2026-10-08T17:47:56-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/9
 ---
 
 # Add a one-line install path that does not require a clone
@@ -212,3 +212,4 @@ have Homebrew.
   - Base: `dev` at `6716cbd`
   - Worktree: `.worktrees/curl-installer`
   - PR: pending
+- **2026-10-10T11:38:17-07:00** — PR opened: https://github.com/gitronald/stanza/pull/9
