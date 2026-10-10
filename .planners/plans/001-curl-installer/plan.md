@@ -254,6 +254,25 @@ have Homebrew.
     section. The checks ran in temp `HOME`/`TMPDIR` directories on a
     machine that already had git, gh, and uv.
 - **2026-10-10T11:38:38-07:00** — Implemented: 4 commits ahead of `dev`.
+- **2026-10-10T12:32:48-07:00** — Review fixes (commit `1f85050`). Codex
+  drafted a code and security review of the PR; the main session checked
+  each finding and made the fixes.
+  - `--version=` with an empty value now errors. Before, it read as "no
+    version" and installed latest (or the checkout), overriding
+    `STANZA_VERSION`.
+  - The last line is `{ main "$@"; }`. A cut inside the braces is a syntax
+    error, which closes the gap the Handoff listed (a cut after `main` ran it
+    with the arguments dropped).
+  - curl gets `--proto-redir '=https'`, so a redirect off HTTPS is refused.
+    The wget fallback is unchanged: BusyBox wget has no `--https-only`.
+  - Tests: an empty-pin case, and truncation now cuts at every byte of the
+    last line and checks for main's banner, not only for an install. A copy
+    with the old code fails 4 checks (the 3 empty-pin checks and the
+    truncation check at the cut after `main`); the real tree passes 32/32,
+    and `tests/test-rules.sh` 115/115.
+  - Not changed, by judgment: archive symlinks (a payload with them can
+    already run code via `bin/stanza`), and stale `lib/` files on upgrade
+    (predates the PR; `bin/stanza` sources its libraries by name).
 
 ## Handoff
 
@@ -263,6 +282,6 @@ have Homebrew.
   `main` copy is the old installer, which fails when piped.
 - Not done, by design (see Recommendation): release asset plus checksum
   (option C) and package managers (D). There is no follow-up plan for C yet.
-- Known gap: a cut exactly after the final `main` (before ` "$@"`) would run
-  `main` with no arguments. That is a default install, which still asks for
-  confirmation or fails without a terminal, so it was left as is.
+- Closed: a cut exactly after the final `main` ran it with no arguments. The
+  last line is now `{ main "$@"; }` (see the review-fixes Log entry).
+- Review fixes are committed but not yet pushed to the PR.
