@@ -235,5 +235,4 @@ Plan 008, written as the follow-up, is retired into this plan.
   3. Sign the checksum (minisign or `ssh-keygen -Y`), or checksum only?
 - Not verified: the plan's fresh-container run (subplan a's Verification),
   and a real HTTPS redirect against `--proto-redir '=https'`.
-- PR #9 is still marked ready for review from the `implemented` step;
-  reactivating did not move it back to draft.
+- PR #9 is back in draft until b is done.
