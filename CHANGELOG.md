@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `install.sh` and `uninstall.sh` print in the same row grammar as
+  `stanza release`: a `stanza install` header, then one labelled row per file
+  or step, with every installed file named by its path before the prompt and
+  as it lands. A fresh install prints about 20 lines instead of about 50.
+- Their color follows `NO_COLOR`, `--no-color` (new on both scripts),
+  `TERM=dumb`, and `CLICOLOR_FORCE`, and is off when the output is not a
+  terminal, so a piped or logged install carries no escape codes.
+- The PATH hint names the user's own startup file (`~/.zshrc`; for bash,
+  `~/.bash_profile` on macOS and `~/.bashrc` elsewhere; `fish_add_path` for
+  fish), and so do the completion hints when the fallback directories are used.
+- Every installer error says whether anything was installed and is followed by
+  a `hint` row with the next step.
+
 ## [1.2.1] - 2026-10-10
 
 ### Changed
