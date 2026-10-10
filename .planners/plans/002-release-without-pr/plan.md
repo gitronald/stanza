@@ -5,7 +5,7 @@ status: active
 branch: feature/release-without-pr
 created: 2026-10-09T14:47:27-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/4
 ---
 
 # Add a no-PR option to stanza release
@@ -88,3 +88,4 @@ rejected push leaves no tag on the remote.
   - Base: `dev` at `0f6d5ef`
   - Worktree: `.worktrees/release-without-pr`
   - PR: pending
+- **2026-10-09T17:22:39-07:00** — PR opened: https://github.com/gitronald/stanza/pull/4
