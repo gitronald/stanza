@@ -100,7 +100,8 @@ And for a checksum mismatch (stderr):
    (it runs before the download), so it carries its own small copy: a color
    gate and `row label content [fd] [sgr]`, plus `header` and `tilde`. Keep
    the label width and colors identical to `print_row`, `print_hint`, and
-   `print_done`, and note in both files that they must stay in step.
+   `print_done`, and note in both files that they must stay in step. Step 7
+   adds a test that enforces it.
    `uninstall.sh` runs from an installed or checked-out tree, so check whether
    it can source `lib/stanza-common` instead of copying.
 2. **install.sh.** Replace `info`/`success`/`warn`/`error` call sites with
@@ -137,9 +138,14 @@ And for a checksum mismatch (stderr):
    ESC byte; `NO_COLOR=1` under a pseudo-TTY contains none either (if a PTY is
    available in the test harness; otherwise test the gate function directly);
    the PATH hint names `~/.zshrc` for `SHELL=/bin/zsh` and `~/.bash_profile`
-   for bash on Darwin (stub `uname`).
-8. **Docs.** Update README install examples that show output, and add a
-   CHANGELOG `[Unreleased]` entry.
+   for bash on Darwin (stub `uname`). Add a drift test that sources
+   `lib/stanza-common` and the installer's helper (or extracts it) and
+   asserts the same label width and the same SGR codes for the dim label,
+   `warn`, `hint`, `error`, and `done`, so the two copies cannot diverge
+   unnoticed.
+8. **Docs.** Add a CHANGELOG `[Unreleased]` entry. The README, CHANGELOG,
+   and `lib/stanza-guide.md` show no installer output today, so there are no
+   examples to update.
 
 ### Verification
 
@@ -147,7 +153,18 @@ And for a checksum mismatch (stderr):
 - Run the installer from a checkout and in fetch mode (local repo URL) and
   compare against the mockup, in a TTY and piped through `cat -v`.
 - On macOS, run under `/bin/bash` 3.2 in Terminal's Basic and Pro profiles.
-  This needs a Mac and is a manual check.
+  This needs a Mac and is carried by plan 010, which reviews this plan's
+  outcome on a Mac after it merges.
+
+### Accepted trade-offs
+
+- **Yellow `warn` label on Terminal's Basic profile (2.4:1 on white).** Kept
+  yellow for consistency with `print_warning` and the CLI's other output.
+  The label word carries the meaning and the content beside it is the
+  default foreground, so the low-contrast hue is a second cue, not the only
+  one. The label is never bold, which would turn it bright yellow (1.3:1)
+  when Terminal brightens bold text. Revisit in plan 010 if it reads poorly
+  on a real Mac.
 
 ### Out of scope
 
