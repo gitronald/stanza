@@ -1,8 +1,8 @@
 ---
 id: 9
 slug: ledger-installer-output
-status: draft
-branch:
+status: active
+branch: feature/ledger-installer-output
 created: 2026-10-10T13:53:07-07:00
 concluded:
 pr:
@@ -174,3 +174,11 @@ And for a checksum mismatch (stderr):
   it, not the reverse.
 - Directions A (Homebrew, tidied) and C (checklist) from the mockups, kept in
   the artifact for reference.
+
+## Log
+
+- **2026-10-10T14:04:05-07:00** — Activated.
+  - Branch: `feature/ledger-installer-output`
+  - Base: `dev` at `3ef5fc1`
+  - Worktree: `.worktrees/ledger-installer-output`
+  - PR: pending

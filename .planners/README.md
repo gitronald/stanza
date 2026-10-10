@@ -2,8 +2,8 @@
 
 | # | Plan | Status | Concluded | PR |
 |---|---|---|---|---|
+| 009 | [Restyle installer output in the ledger row grammar](plans/009-ledger-installer-output/plan.md) | active | — | — |
 | 010 | [Check the ledger installer output on macOS](plans/010-mac-installer-check/plan.md) | draft | — | — |
-| 009 | [Restyle installer output in the ledger row grammar](plans/009-ledger-installer-output/plan.md) | draft | — | — |
 | 007 | [Resume a release that stopped before its tag](plans/007-resume-earlier-release-steps/plan.md) | draft | — | — |
 | 006 | [Research porting stanza to a Python uv tool](plans/006-python-uv-port/plan.md) | draft | — | — |
 | 005 | [Add CI with an output-mode matrix and a bash 3.2 job](plans/005-ci-output-contract/plan.md) | draft | — | — |
