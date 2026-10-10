@@ -1,10 +1,10 @@
 ---
 id: 1
 slug: curl-installer
-status: implemented
+status: done
 branch: feature/curl-installer
 created: 2026-10-08T17:47:56-07:00
-concluded:
+concluded: 2026-10-10T13:16:25-07:00
 pr: https://github.com/gitronald/stanza/pull/9
 ---
 
@@ -225,11 +225,29 @@ Plan 008, written as the follow-up, is retired into this plan.
   no signing. Detail in [subplan b](subplans/b-verified-release-download.md)'s
   Log.
 - **2026-10-10T12:55:42-07:00** — Implemented: 20 commits ahead of `dev`.
+- **2026-10-10T13:16:44-07:00** — Close review of PR #9 (`/code-review`,
+  medium), posted to the PR.
+  - Review follow-up: 4 findings, 3 fixed, 1 skipped.
+    - Fixed (`bba6201`): the latest-tag lookup ran before the dependency
+      check, so a piped install without git blamed the connection. It moved
+      to `find_latest_release`, after `check_dependencies`. Regression case
+      "Piped without git" in `tests/test-install.sh`, which fails on the old
+      installer.
+    - Fixed (`53d2f6d`): the two truncation loops shared one body (now
+      `cut_runs_main`), and an `out` capture was never read.
+    - Skipped: `fetch-depth: 0` in the release-asset workflow. A shallow
+      checkout would likely work, but nothing can test it before the first
+      real release run.
+    - Rejected in verification: the newest tag without an asset (documented,
+      fails closed with a retry hint), a dispatch for a tag older than the
+      script (refused by design), and the re-checks in `install_files`
+      (already on `dev`).
+  - All 9 suites pass locally (`test-install.sh` 53/53).
 
 ## Handoff
 
-- State: subplans a and b are done, committed on `feature/curl-installer`,
-  and carried by PR #9.
+- State: subplans a and b are done. The plan is closed and PR #9 is merged
+  into `dev`. Nothing is uncommitted.
 - Release gate: the first stable release after this merges is the one that
   turns the one-liner on (it fetches `install.sh` from `main`). Its tag push
   runs the `release-asset` workflow, which must succeed. Check the release
@@ -246,3 +264,24 @@ Plan 008, written as the follow-up, is retired into this plan.
   the next stable tag); the installer against a real release download; the
   fresh-container run from subplan a's Verification; a real HTTPS redirect
   against `--proto-redir '=https'`.
+  These all wait on the next stable release and are checked by the release
+  gate above; no follow-up plan holds them.
+
+## Retrospective
+
+- The plan's recommendation (B now, C later) did not survive contact: C
+  (a checksummed release asset) landed in the same PR as subplan b, once it
+  turned out a tag-triggered workflow could build the asset without
+  touching `stanza release`.
+- Splitting into nested subplans after the first review worked well. Plan
+  008 folded in as subplan b, and the umbrella kept only decisions.
+- The truncation guard needed more than `main "$@"` on the last line. A cut
+  before `"$@"` runs main with its arguments dropped, and the brace group
+  is what makes bash read the whole line first. A byte-by-byte test of the
+  last line caught it.
+- The one-liner cannot be tested end to end before the first release with
+  an asset. The release gate in Handoff is the real verification, so the
+  next stable release should be treated as part of this work.
+- The close review found an ordering bug (a network lookup before the
+  dependency check) that no test exercised. A "missing tool" case per
+  dependency is cheap with `path_without`.
