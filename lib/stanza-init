@@ -209,18 +209,14 @@ fi
 confirm_step "Create GitHub repository and link to local git" "$CANCEL_MSG"
 
 # Create GitHub repository (gh writes its own progress to stdout in verbose mode)
+CREATE_REPO_ARGS=(repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=origin)
+if [[ -n "$DESCRIPTION" ]]; then
+    CREATE_REPO_ARGS+=(--description "$DESCRIPTION")
+fi
 if [[ "$VERBOSITY" -ge 2 ]]; then
-    if [[ -n "$DESCRIPTION" ]]; then
-        gh repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=origin --description "$DESCRIPTION"
-    else
-        gh repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=origin
-    fi
+    gh "${CREATE_REPO_ARGS[@]}"
 else
-    if [[ -n "$DESCRIPTION" ]]; then
-        gh repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=origin --description "$DESCRIPTION" >/dev/null 2>&1
-    else
-        gh repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=origin >/dev/null 2>&1
-    fi
+    gh "${CREATE_REPO_ARGS[@]}" >/dev/null 2>&1
 fi
 
 REPO_URL=$(gh repo view --json url --jq .url)
