@@ -25,16 +25,31 @@ _stanza_completion() {
 
     # Main commands
     local commands="release init guide rules help version"
+    local global_opts="-q --quiet -v -vv --verbose --json --no-color -V --version -h --help"
+
+    # Locate the command after any leading global flags.
+    local command_index=1
+    while [[ $command_index -lt $cword ]]; do
+        case ${words[command_index]} in
+            -q|--quiet|--verbose|--json|--no-color) ;;
+            -v*) [[ ${words[command_index]} =~ ^-v+$ ]] || break ;;
+            --) command_index=$((command_index + 1)); break ;;
+            *) break ;;
+        esac
+        command_index=$((command_index + 1))
+    done
+    words=("${words[0]}" "${words[@]:command_index}")
+    cword=$((cword - command_index + 1))
 
     # Release subcommands: bump types plus the phase tokens (pr, merge)
     local release_types="patch minor major pre prerelease"
     local release_phases="pr merge"
 
     # Release options
-    local release_opts="--pr-note --no-pr --no-dev-cycle --no-changelog --local -y --yes -q --quiet -v --verbose --json --no-color -h --help"
+    local release_opts="--pr-note --no-pr --no-dev-cycle --no-changelog --local -y --yes -q --quiet -v -vv --verbose --json --no-color -h --help"
 
     # Init options
-    local init_opts="-n --name -d --description --public --current-branch-only -y --yes -h --help"
+    local init_opts="-n --name -d --description -t --type --public --current-branch-only -y --yes -q --quiet -v -vv --verbose --json --no-color -h --help"
 
     # Rules actions and options (--local and --force only where the action takes them)
     local rules_actions="install check uninstall"
@@ -44,7 +59,7 @@ _stanza_completion() {
     case $cword in
         1)
             # Complete main commands
-            candidates="$commands"
+            candidates="$commands $global_opts"
             ;;
         2)
             # Complete based on first command
@@ -71,8 +86,11 @@ _stanza_completion() {
                         candidates="$rules_actions"
                     fi
                     ;;
-                guide|help|version)
-                    # No completion needed for guide, help, and version
+                version)
+                    candidates="-q --quiet -v --verbose --json --no-color -h --help"
+                    ;;
+                guide|help)
+                    # No completion needed for guide and help
                     ;;
             esac
             ;;
@@ -97,6 +115,9 @@ _stanza_completion() {
                         -n|--name|-d|--description)
                             # No completion for values, let user type
                             ;;
+                        -t|--type)
+                            candidates="bash uv"
+                            ;;
                         *)
                             if [[ $cur == -* ]]; then
                                 candidates="$init_opts"
@@ -112,6 +133,9 @@ _stanza_completion() {
                             *)         candidates="$rules_opts" ;;
                         esac
                     fi
+                    ;;
+                version)
+                    candidates="-q --quiet -v --verbose --json --no-color -h --help"
                     ;;
             esac
             ;;
