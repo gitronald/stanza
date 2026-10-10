@@ -243,29 +243,45 @@ Plan 008, written as the follow-up, is retired into this plan.
       script (refused by design), and the re-checks in `install_files`
       (already on `dev`).
   - All 9 suites pass locally (`test-install.sh` 53/53).
+- **2026-10-10T13:25:06-07:00** — Release gate passed on v1.2.0 (PR #10).
+  - The `release-asset` workflow ran on the tag push and succeeded in 13s.
+    The release has `stanza-1.2.0.tar.gz` and `.sha256`, and an independent
+    `sha256sum` of the download matches the published checksum.
+  - The README one-liner, run with `env -i`, an empty `HOME`, and a scratch
+    `--prefix` from outside any checkout, installed `stanza 1.2.0` and
+    printed `Verified SHA-256 224fabaf...`.
+  - The asset download redirects (302) from `github.com` to
+    `release-assets.githubusercontent.com` over HTTPS, and the install
+    succeeds under `--proto-redir '=https'`.
+  - The `wget` fallback (no `curl` on `PATH`) verifies and installs too.
+  - `--version 1.1.3` is refused (asset 404) with the clone hint, and
+    nothing is installed. A run with no terminal and no `--yes` stops with
+    the `--yes` hint. A run with no `uv` reports it before any download.
+  - Not run: a real fresh container (no Docker or Podman on this machine;
+    the `env -i` run stands in for it), and a checksum mismatch against a
+    real release (covered only by `tests/test-install.sh`).
 
 ## Handoff
 
 - State: subplans a and b are done. The plan is closed and PR #9 is merged
   into `dev`. Nothing is uncommitted.
-- Release gate: the first stable release after this merges is the one that
-  turns the one-liner on (it fetches `install.sh` from `main`). Its tag push
-  runs the `release-asset` workflow, which must succeed. Check the release
-  has `stanza-<version>.tar.gz` and `.sha256`, then run the one-liner against
-  it. If the workflow fails, re-run it from the Actions tab with the tag, or
-  run `scripts/release-asset.sh v<version>` locally.
+- Release gate: passed on v1.2.0, the release that turned the one-liner on.
+  If a later release's `release-asset` run fails, re-run it from the Actions
+  tab with the tag, or run `scripts/release-asset.sh v<version>` locally.
 - Questions (all settled 2026-10-10, see subplan b's Log):
   1. Opt-in for the release-asset step: avoided. A workflow in this repo
      builds it, and `stanza release` is unchanged.
   2. Tags without an asset (v1.1.3 and earlier): refused, with a pointer to
      the clone path.
   3. Signing: no, checksum only; the README says what that does not cover.
-- Not verified: the workflow and `gh release` calls on GitHub (first run is
-  the next stable tag); the installer against a real release download; the
-  fresh-container run from subplan a's Verification; a real HTTPS redirect
-  against `--proto-redir '=https'`.
-  These all wait on the next stable release and are checked by the release
-  gate above; no follow-up plan holds them.
+- Verified on v1.2.0 (see the 2026-10-10T13:25 Log entry): the workflow and
+  `gh release` calls, the installer against a real release download, and a
+  real HTTPS redirect under `--proto-redir '=https'`. The release gate has
+  passed.
+- Not verified: a run in a real fresh container (an `env -i` run with an
+  empty `HOME` stood in for it), and a checksum mismatch against a real
+  release (covered by `tests/test-install.sh` only). No follow-up plan
+  holds them.
 
 ## Retrospective
 
