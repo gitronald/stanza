@@ -348,5 +348,42 @@ escaped=$(
 )
 if [[ "$escaped" == 'café \"path\\file\"' ]]; then pass "ordinary strings preserve Unicode and escaping"; else fail "ordinary strings preserve Unicode and escaping"; fi
 
+echo ""
+echo "row helpers decide color outside \$(...)"
+# A gate that answers yes only in the calling shell: a helper that asks it
+# from inside a command substitution, where fd 1 is the capture pipe, gets no
+# and prints no color
+rows_file=$(mktemp)
+(
+    source "$(dirname "$STANZA")/../lib/stanza-common"
+    should_use_color() { [[ $BASH_SUBSHELL -le 1 ]]; }
+    print_header release "dev, uv"
+    print_row bump "0.1.0 -> 0.1.1"
+    print_done "0.1.1 on dev"
+    print_hint "git status"
+) > "$rows_file" 2>&1
+rows=$(cat "$rows_file")
+rm -f "$rows_file"
+expect=$(printf '%b\n' '\033[1mstanza release\033[0m  (dev, uv)' \
+    '  \033[2mbump    \033[0m0.1.0 -> 0.1.1' \
+    '  \033[0;32mdone    \033[0m0.1.1 on dev' \
+    '  \033[0;36mhint    \033[0mgit status')
+if [[ "$rows" == "$expect" ]]; then pass "header, row, done, and hint carry color"; else fail "header, row, done, and hint carry color: $(printf '%s' "$rows" | cat -v)"; fi
+
+echo ""
+echo "stanza release colors its rows on a terminal"
+if script --version 2> /dev/null | grep -q util-linux; then
+    fresh_repo_alpha
+    out=$(script -qec "env -u NO_COLOR TERM=xterm '$STANZA' release prerelease -y --local" /dev/null 2>&1)
+    if [[ "$out" == *$'\033[2mbump'* ]]; then pass "dim label on a terminal"; else fail "dim label on a terminal: $(printf '%s' "$out" | cat -v)"; fi
+    if [[ "$out" == *$'\033[0;32mdone'* ]]; then pass "green done on a terminal"; else fail "green done on a terminal"; fi
+    if [[ "$out" == *$'\033[1mstanza release'* ]]; then pass "bold header on a terminal"; else fail "bold header on a terminal"; fi
+    out=$(script -qec "env NO_COLOR=1 TERM=xterm '$STANZA' release prerelease -y --local" /dev/null 2>&1)
+    if [[ "$out" != *$'\033'* ]]; then pass "NO_COLOR on a terminal: no ESC byte"; else fail "NO_COLOR on a terminal: no ESC byte"; fi
+    cleanup
+else
+    echo "  SKIP: util-linux script not available"
+fi
+
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]] || exit 1

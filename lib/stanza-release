@@ -473,18 +473,6 @@ set_version() {
     echo "$new_version"
 }
 
-print_branch_version() {
-    local branch="$1"
-    local project_type
-    project_type=$(detect_project_type)
-    if [[ "$project_type" == "uv" ]]; then
-        version=$(uv version)
-    else
-        version=$(get_current_version)
-    fi
-    printf '%b\n' "${PURPLE}[$branch]${NC} $version"
-}
-
 # Default values (VERBOSE/VERBOSITY/JSON_OUTPUT may already be set by bin/stanza)
 BUMP_TYPE=""
 PHASE="full"          # full | pr | merge

@@ -5,7 +5,6 @@
 # Colors
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-PURPLE='\033[0;35m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 DIM='\033[2m'
@@ -53,62 +52,48 @@ should_use_color() {
     return 0
 }
 
-# Wrap text in color codes only when color is enabled.
-# Usage: _c "$CYAN" "text"
-_c() {
-    local code="$1"; shift
-    if should_use_color; then
-        printf "%b%s%b" "$code" "$*" "$NC"
-    else
-        printf "%s" "$*"
-    fi
-}
-
 # Width of the label column (left padding + label, then a gap). Set to the
 # longest label + 1 so every row keeps at least a one-space gap before content.
 # 8 covers all current verbs (bump, commit, push, pr, merge, tag, cycle, checks,
 # done, repo, remote, tags, readme, promote, error, warn, hint, dry-run).
 LABEL_WIDTH=8
 
+# Print "  LABEL    content" to stdout, the label in color code $2 when
+# stdout gets color. The decision is made here, never inside $(...), where
+# fd 1 is the capture pipe and would read as "not a terminal".
+# Usage: _print_label_row "$DIM" bump "0.6.1a0 -> 0.6.2a0"
+_print_label_row() {
+    local on="" off=""
+    if should_use_color; then on="$1" off="$NC"; fi
+    printf "  %b%-${LABEL_WIDTH}s%b%s\n" "$on" "$2" "$off" "$3"
+}
+
 # Print the header line for a command.
 # Usage: print_header release "dev, uv"
 print_header() {
     local cmd="$1"
     local context="${2:-}"
+    local on="" off=""
     [[ "$JSON_OUTPUT" == "true" ]] && return 0
     [[ "$VERBOSITY" -lt 1 ]] && return 0
-    if [[ -n "$context" ]]; then
-        printf "%s  (%s)\n" "$(_c "$BOLD" "stanza $cmd")" "$context"
-    else
-        printf "%s\n" "$(_c "$BOLD" "stanza $cmd")"
-    fi
+    if should_use_color; then on="$BOLD" off="$NC"; fi
+    printf "%bstanza %s%b%s\n" "$on" "$cmd" "$off" "${context:+  ($context)}"
 }
 
 # Print a labelled row: "  LABEL    content".
 # Usage: print_row bump "0.6.1a0 -> 0.6.2a0"
 print_row() {
-    local label="$1"
-    local content="${2:-}"
     [[ "$JSON_OUTPUT" == "true" ]] && return 0
     [[ "$VERBOSITY" -lt 1 ]] && return 0
-    printf "  %b%-${LABEL_WIDTH}s%b%s\n" \
-        "$(should_use_color && echo -n "$DIM")" \
-        "$label" \
-        "$(should_use_color && echo -n "$NC")" \
-        "$content"
+    _print_label_row "$DIM" "$1" "${2:-}"
 }
 
 # Print the closing "done" row in green.
 # Usage: print_done "0.6.2a0 on dev"
 print_done() {
-    local content="$1"
     [[ "$JSON_OUTPUT" == "true" ]] && return 0
     [[ "$VERBOSITY" -lt 1 ]] && return 0
-    printf "  %b%-${LABEL_WIDTH}s%b%s\n" \
-        "$(should_use_color && echo -n "$GREEN")" \
-        "done" \
-        "$(should_use_color && echo -n "$NC")" \
-        "$content"
+    _print_label_row "$GREEN" done "$1"
 }
 
 # Print a hint row to stderr (remediation suggestion).
@@ -119,13 +104,11 @@ print_done() {
 STANZA_HINTS=""
 print_hint() {
     local content="$1"
+    local on="" off=""
     STANZA_HINTS="${STANZA_HINTS:+$STANZA_HINTS$'\n'}$content"
     [[ "$JSON_OUTPUT" == "true" ]] && return 0
-    printf "  %b%-${LABEL_WIDTH}s%b%s\n" \
-        "$(should_use_color 2 && echo -n "$CYAN")" \
-        "hint" \
-        "$(should_use_color 2 && echo -n "$NC")" \
-        "$content" >&2
+    if should_use_color 2; then on="$CYAN" off="$NC"; fi
+    printf "  %b%-${LABEL_WIDTH}s%b%s\n" "$on" hint "$off" "$content" >&2
 }
 
 # Print a row only when verbosity >= 2 (verbose mode).
