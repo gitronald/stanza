@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Shell completions offer the global flags (`--json`, `-q`, `-v`, `-vv`,
+  `--no-color`, `-V`, `-h`) and the missing `init` options (`-t/--type`, output
+  flags), and bash completion works after leading global flags.
+
+### Changed
+
+- `stanza release merge` must run on `dev` in every mode, including `--local`.
+- `stanza release merge` takes the tag from the version on `dev` and refuses a
+  release PR whose title differs, instead of using the PR title as the tag.
+- `stanza release merge` refuses a PR that is not open, does not target the base
+  branch, or whose head cannot be read, and passes `--match-head-commit` so a
+  push between the check and the merge fails the merge.
+- uv and bash projects reject versions with leading zeros (`1.2.08`), which
+  semver forbids. LaTeX versions keep them and bump in base 10.
+- `gh` is required only on the PR path; `--local`, `--no-pr`, and prerelease
+  runs work without it installed.
+
+### Fixed
+
+- A successful `-q --json` run of `release` or `init` exited 1.
+- With `--json`, `-v`/`-vv` printed prompts and git/gh output to stdout ahead of
+  the JSON document; they now go to stderr.
+- LaTeX version parsing read `\ProvidesClass{x}[2026/01/01 v1.2]` as `1.2]`,
+  and a bump dropped the closing bracket.
+- JSON output left control characters other than newline, carriage return, and
+  tab unescaped, producing invalid JSON.
+- README title sync matched partial tokens such as `v1.2.3beta` and rewrote
+  them as `v1.2.4beta`.
+
 ## [1.1.2] - 2026-10-09
 
 ### Added
