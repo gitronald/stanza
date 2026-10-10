@@ -1,11 +1,11 @@
 ---
 id: 2
 slug: release-without-pr
-status: active
+status: done
 branch: feature/release-without-pr
 created: 2026-10-09T14:47:27-07:00
-concluded:
-pr:
+concluded: 2026-10-09T17:46:48-07:00
+pr: https://github.com/gitronald/stanza/pull/4
 ---
 
 # Add a no-PR option to stanza release
@@ -88,3 +88,43 @@ rejected push leaves no tag on the remote.
   - Base: `dev` at `0f6d5ef`
   - Worktree: `.worktrees/release-without-pr`
   - PR: pending
+- **2026-10-09T17:22:39-07:00** — PR opened: https://github.com/gitronald/stanza/pull/4
+- **2026-10-09T17:22:40-07:00** — Implemented: 3 commits ahead of `dev`.
+- **2026-10-09T17:47:11-07:00** — Closed after review.
+  - Review follow-up (`/code-review` at medium on PR #4, posted as a PR
+    comment): 7 findings, all fixed in `974dad2`.
+    - The ff-only failure hint now says `git checkout dev` before
+      `release merge --no-pr`. Test: `test_no_pr_diverged_base_hint`.
+    - The merge-phase recovery hint no longer says `gh pr create`, since the pr
+      phase's PR is open. Test: `test_no_pr_merge_phase_protected_skips_pr_create`.
+    - A failed atomic push now prints git's output, so the remote's reason
+      shows. Assertions were added to the protected-base and PR-path tests.
+    - `prerelease --no-pr` warns, and the header no longer says "no PR".
+      `NO_PR` is settled before the header. Test: `test_no_pr_ignored_by_prerelease`.
+    - The PR-path retry hint names the dev cycle. Test:
+      `test_pr_path_push_failure_hints_dev_cycle`.
+    - Refactors: `release_uses_pr` replaces three copies of its condition, and
+      `git_merge_dev_into_main` tests `should_skip_remote` once.
+    - Conscious no-ops: the docs wording differences across help, README,
+      guide, and CHANGELOG (all accurate, and hand-synced as before), and the
+      repeated test assertions (they match the file's pattern).
+  - Check gate: all six `tests/test-*.sh` scripts pass, 315 assertions in
+    total. The 7 new assertions fail on the pre-fix code. shellcheck is not
+    installed, so it was not run.
+
+## Retrospective
+
+- The design questions were settled before any code, so implementation was
+  small. Most of `--no-pr` reused the `--local` merge path, as the plan
+  predicted.
+- `--atomic` changed the PR path as well: one tag instead of `--tags`.
+  Recording it under Changed was the right call.
+- The review's real catches were all on failure paths: recovery hints that
+  sent the user to a command that would fail next, and a hidden git error.
+  For later flags, write a test for each printed recovery hint by following it.
+- An update hook (per ref) rather than pre-receive (whole push) is what makes
+  a local bare remote a faithful stand-in for branch protection. It is worth
+  reusing for plan 003.
+- Not verified: a first release where origin has no base branch yet. The
+  ff-only pull would fail with the reconcile hint. This is untested and left
+  as it is.

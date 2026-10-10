@@ -87,6 +87,7 @@ _stanza_release() {
         '1: :->first' \
         '2: :->second' \
         '--pr-note[Append a note to the PR body]:note text:' \
+        '--no-pr[Merge dev into the base branch directly, without a PR]' \
         '--no-dev-cycle[Skip the post-release dev cycle (no merge-back or bump)]' \
         '--no-changelog[Skip CHANGELOG [Unreleased] promotion and its empty-section check]' \
         '--local[Local-only mode (skip all remote operations)]' \

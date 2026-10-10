@@ -183,6 +183,7 @@ Arguments:
 
 Options:
       --pr-note <TEXT>     Append a note to the PR body (full and pr phases)
+      --no-pr              Merge dev into the base branch without a PR (full and merge phases)
       --no-dev-cycle  Skip the post-release dev cycle (full and merge phases)
       --no-changelog       Skip CHANGELOG [Unreleased] promotion and its check
   -y, --yes                Auto-confirm all prompts (useful for CI/CD)
@@ -198,6 +199,7 @@ Examples:
   stanza release minor                # 0.1.1 -> 0.2.0, PR from dev to main
   stanza release major                # 0.2.0 -> 1.0.0, PR from dev to main
   stanza release patch -y             # Non-interactive release
+  stanza release patch -y --no-pr     # Merge dev into main directly, no PR
   stanza release pr minor -y          # Phase 1: bump + open PR, then stop
   stanza release merge -y             # Phase 2: merge the open PR, tag, new cycle
   stanza release pr patch --pr-note "fixes #42"   # Open PR with a note in its body
@@ -253,6 +255,10 @@ stanza release merge -y         # merge the PR, tag, open the next prerelease cy
   one-shot release; ignored by `merge`).
 - `--no-dev-cycle` skips the post-release dev cycle (applies to the full
   one-shot release and to `merge`; ignored by `pr`, which stops before the cycle).
+- `--no-pr` merges `dev` into the base branch directly instead of through a PR,
+  then pushes the base branch and tag atomically (applies to the full one-shot
+  release and to `merge`; ignored by `pr`, with a warning). A protected base
+  branch refuses the push, so no tag reaches the remote.
 - Phases do not apply to `prerelease`, which opens no PR.
 
 Run `stanza guide` for a compact, agent-facing version of this workflow.
