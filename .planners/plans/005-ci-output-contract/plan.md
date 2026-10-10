@@ -63,6 +63,18 @@ on whatever bash that machine has (5.x here). Two gaps follow.
    `jq -e .` for JSON validation in the matrix.
 2. Should ShellCheck gate CI from day one, or report only until the
    remaining findings are triaged?
+   **Answered 2026-10-09: gate from day one, after a cleanup commit.** A trial
+   cleared all 27 findings in about 30 lines with no behavior change and all
+   tests passing: `# shellcheck source-path=`/`source=` directives (clears the
+   7 SC1091 and the 9 cross-file SC2034), a disable comment on `PURPLE`, a
+   `VERBOSE="${VERBOSE:-false}"` default (SC2153), a `while read` loop in the
+   bash completion (SC2207, no `mapfile` on bash 3.2), and split
+   `local`/assign for the 8 SC2155. Six of those splits change nothing (four
+   run inside `$(...)`, where bash drops `set -e`; two wrap `echo | awk`, so
+   use `read -r ahead behind <<<`). The two `current_branch=$(get_current_branch)`
+   splits must be written `... || current_branch=""`, or `require_branch`
+   outside a repo dies with exit 128 instead of printing its error. Make this
+   the first step, then gate CI on zero findings.
 
 ### Order
 
