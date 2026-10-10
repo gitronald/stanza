@@ -1,7 +1,7 @@
 ---
 id: 1
 slug: curl-installer
-status: active
+status: implemented
 branch: feature/curl-installer
 created: 2026-10-08T17:47:56-07:00
 concluded:
@@ -253,6 +253,7 @@ have Homebrew.
   - Not verified: the fresh-container run from the plan's Verification
     section. The checks ran in temp `HOME`/`TMPDIR` directories on a
     machine that already had git, gh, and uv.
+- **2026-10-10T11:38:38-07:00** — Implemented: 4 commits ahead of `dev`.
 
 ## Handoff
 
