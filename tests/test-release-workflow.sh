@@ -764,12 +764,7 @@ test_no_pr_protected_base_pushes_nothing() {
 
     # An update hook refuses per ref, as GitHub branch protection does
     # (pre-receive would refuse the whole push and hide a non-atomic push).
-    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
-#!/bin/bash
-[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }
-exit 0
-HOOK
-    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+    remote_update_hook '[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }'
 
     local err exit_code=0
     err=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || exit_code=$?
@@ -792,12 +787,7 @@ test_no_pr_merge_phase_protected_skips_pr_create() {
     setup_remote_repo
 
     NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
-    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
-#!/bin/bash
-[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }
-exit 0
-HOOK
-    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+    remote_update_hook '[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }'
 
     local err exit_code=0
     err=$(NO_COLOR=1 "$STANZA" release merge -y --no-pr 2>&1) || exit_code=$?
@@ -848,12 +838,7 @@ test_pr_path_push_failure_hints_dev_cycle() {
     echo "PR release whose tag push is refused: the hint covers the dev cycle"
     setup_remote_repo
 
-    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
-#!/bin/bash
-[[ "$1" == refs/tags/* ]] && { echo "tags are refused" >&2; exit 1; }
-exit 0
-HOOK
-    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+    remote_update_hook '[[ "$1" == refs/tags/* ]] && { echo "tags are refused" >&2; exit 1; }'
 
     local err exit_code=0
     err=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || exit_code=$?
@@ -977,6 +962,16 @@ test_cycle_push_failure_resumes() {
     assert_contains "hints the push by hand" "$out" "or by hand: git checkout dev && git push origin dev"
     assert_eq "dev bumped locally" "0.1.1a0" "$(cat VERSION)"
 
+    # A resume that fails at the same push still knows dev is advanced, and
+    # its by-hand hint does not bump a second time.
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "refused resume exits 1" "1" "$code"
+    assert_contains "refused resume says dev is advanced" "$out" \
+        "cycle   failed; v0.1.0 is released; dev is advanced locally but not pushed"
+    assert_not_contains "refused resume does not hint a second bump" "$out" "stanza release prerelease"
+    assert_eq "refused resume does not bump" "0.1.1a0" "$(cat VERSION)"
+
     rm "$TEST_TMPDIR/remote.git/hooks/update"
     code=0
     out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
@@ -995,6 +990,52 @@ test_cycle_push_failure_resumes() {
     assert_contains "second resume has nothing to do" "$out" "(already advanced, nothing to push)"
     assert_eq "second resume leaves dev unchanged" "$before" "$(git rev-parse dev)"
 
+    teardown_remote_repo
+}
+
+test_resume_tag_fetch_failure_stops() {
+    echo ""
+    echo "Resume whose tag fetch fails stops there, without a re-tag hint"
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --no-dev-cycle >/dev/null 2>&1
+    git checkout -q dev
+    # The tag is on origin only, and a local v0.1.0/x ref blocks fetching it.
+    git tag -d v0.1.0 >/dev/null
+    git tag v0.1.0/x
+
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "exits 1" "1" "$code"
+    assert_contains "names the failed fetch" "$out" \
+        "git fetch origin refs/tags/v0.1.0:refs/tags/v0.1.0 failed"
+    assert_not_contains "does not go on to the tag step" "$out" "tag     failed"
+    assert_not_contains "does not hint re-tagging" "$out" "git tag v0.1.0"
+    teardown_remote_repo
+}
+
+test_subshell_error_reaches_json() {
+    echo ""
+    echo "An error printed inside a subshell reaches the failure JSON"
+    setup_remote_repo
+    rm VERSION
+    local json
+    json=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null) || true
+    assert_contains "failed in preflight" "$json" '"failed_step":"preflight"'
+    assert_contains "error carries the message" "$json" '"error":"No version file found'
+    teardown_remote_repo
+}
+
+test_prerelease_push_failure_warns() {
+    echo ""
+    echo "A refused prerelease push warns, keeps the remote's reason, and succeeds"
+    setup_remote_repo
+    remote_update_hook '[[ "$1" == refs/heads/dev ]] && { echo "dev is protected" >&2; exit 1; }'
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release prerelease -y 2>&1) || code=$?
+    assert_eq "exits 0" "0" "$code"
+    assert_contains "warns naming the push" "$out" "[WARNING] git push origin dev failed (exit 1)"
+    assert_contains "keeps the remote's reason" "$out" "remote: dev is protected"
+    assert_not_contains "prints no error" "$out" "[ERROR]"
     teardown_remote_repo
 }
 
@@ -1196,6 +1237,9 @@ test_pr_path_push_failure_hints_dev_cycle
 test_failed_step_is_named
 test_failed_step_json_fields
 test_cycle_push_failure_resumes
+test_resume_tag_fetch_failure_stops
+test_subshell_error_reaches_json
+test_prerelease_push_failure_warns
 test_stalled_fetch_stops_cycle
 test_local_cycle_resume
 

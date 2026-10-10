@@ -27,14 +27,19 @@ check_git_remote_status() {
 RELEASE_STEP=""
 RELEASE_DONE_STEPS=""
 RELEASE_PR_MERGED=false
-CYCLE_BUMPED=false
+# True once the dev cycle finds dev on the next prerelease, bumped by this run
+# or an earlier one, so the failure advice never suggests a second bump.
+DEV_ADVANCED=false
 
-# Also clears the recorded error and hints, so a hint printed by an earlier,
-# successful step is not taken as the failing step's own.
+# Also clears the recorded error and hints, so an error or hint printed by an
+# earlier, successful step is not taken as the failing step's own.
 step_start() {
     RELEASE_STEP="$1"
     STANZA_LAST_ERROR=""
     STANZA_HINTS=""
+    if [[ -n "$STANZA_ERROR_LOG" ]]; then
+        : > "$STANZA_ERROR_LOG" 2>/dev/null || true
+    fi
 }
 
 step_done() {
@@ -107,7 +112,7 @@ release_failure_advice() {
             fi
             ;;
         cycle)
-            if [[ "$CYCLE_BUMPED" == "true" ]]; then
+            if [[ "$DEV_ADVANCED" == "true" ]]; then
                 FAILED_STATE="$tag is released; dev is advanced locally but not pushed"
                 manual="git checkout dev && git push origin dev"
             else
@@ -134,14 +139,22 @@ release_failure_advice() {
 # hints) the resume command. With --json, emit the failure document:
 #   {"ok":false,"failed_step":...,"completed_steps":[...],"error":...,
 #    "resume":...,"hint":...}
-# failed_step is "preflight" when no step had started. The exit status is kept.
+# failed_step is "preflight" when no step had started. error is the last
+# print_error message, read from STANZA_ERROR_LOG when there is one, so an error
+# printed inside $(...) counts. The exit status is kept.
 on_release_exit() {
     local status=$?
     trap - EXIT
+    local error="$STANZA_LAST_ERROR"
+    if [[ -n "$STANZA_ERROR_LOG" ]]; then
+        if [[ -s "$STANZA_ERROR_LOG" ]]; then
+            error=$(cat "$STANZA_ERROR_LOG")
+        fi
+        rm -f "$STANZA_ERROR_LOG"
+    fi
     [[ $status -eq 0 ]] && exit 0
     local step="${RELEASE_STEP:-preflight}"
     local own_hints="$STANZA_HINTS"
-    local error="$STANZA_LAST_ERROR"
     FAILED_STATE=""
     RESUME_CMD=""
     RESUME_NOTES=""
@@ -189,7 +202,7 @@ push_with_retry() {
     local max_attempts=3
     local attempt=1
     while [[ $attempt -le $max_attempts ]]; do
-        if git_quiet push origin "$branch"; then
+        if quiet_try git_net push origin "$branch"; then
             return 0
         fi
         local status ahead behind
@@ -703,6 +716,7 @@ elif [[ -z "$BUMP_TYPE" ]]; then
 fi
 
 # From here on a failed run names its step and how to resume (see on_release_exit).
+STANZA_ERROR_LOG=$(mktemp "${TMPDIR:-/tmp}/stanza-error.XXXXXX" 2>/dev/null) || STANZA_ERROR_LOG=""
 trap on_release_exit EXIT
 
 # Deferred initialization (after help check, so --help works without a version file)
@@ -898,7 +912,7 @@ gh_create_pr() {
     if [[ -n "$PR_NOTE" && -n "$RELEASE_PR_NUMBER" ]]; then
         local body
         body=$(gh pr view "$RELEASE_PR_NUMBER" --json body --jq '.body' 2>/dev/null || true)
-        if ! gh_quiet pr edit "$RELEASE_PR_NUMBER" --body "${body}"$'\n\n'"${PR_NOTE}"; then
+        if ! quiet_try gh pr edit "$RELEASE_PR_NUMBER" --body "${body}"$'\n\n'"${PR_NOTE}"; then
             print_warning "the --pr-note was not added to PR #$RELEASE_PR_NUMBER; the release continues"
         fi
     fi
@@ -1013,6 +1027,9 @@ create_new_prerelease_cycle() {
     step_start cycle
     confirm_step "3: Create a new version cycle and commit a new prerelease on dev"
     git_quiet checkout dev
+    if [[ "$PROJECT_TYPE_DETECTED" != "latex" && "$(get_current_version)" == *a* ]]; then
+        DEV_ADVANCED=true  # an earlier run bumped dev; the failure advice must know
+    fi
 
     # Merge base branch into dev to keep histories in sync (includes merge commit from PR)
     if ! should_skip_remote; then
@@ -1032,9 +1049,9 @@ create_new_prerelease_cycle() {
             outcome="already advanced"
         else
             bump_and_commit_version "prerelease"
-            CYCLE_BUMPED=true
             print_doc_sync_rows
         fi
+        DEV_ADVANCED=true
     fi
 
     if ! should_skip_remote; then
@@ -1098,7 +1115,9 @@ find_shipped_release() {
         exit 1
     fi
     if [[ -z "$local_sha" ]]; then
-        git_quiet fetch origin "refs/tags/$tag:refs/tags/$tag"
+        # Callers run this as an 'if' condition, where set -e is off: exit here,
+        # or a failed fetch resumes a release whose tag this clone lacks.
+        git_quiet fetch origin "refs/tags/$tag:refs/tags/$tag" || exit 1
     elif ! should_skip_remote && [[ -z "$remote_sha" ]]; then
         SHIPPED_TAG_UNPUSHED=true
     fi

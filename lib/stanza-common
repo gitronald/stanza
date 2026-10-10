@@ -233,11 +233,17 @@ print_warning() {
 
 # Print error message with standard format.
 # Accepts an optional second argument for a hint line.
-# Records the message in STANZA_LAST_ERROR and clears STANZA_HINTS.
+# Records the message in STANZA_LAST_ERROR and clears STANZA_HINTS. When
+# STANZA_ERROR_LOG names a file, the message is also written there, so an error
+# printed inside $(...) still reaches the caller's exit trap.
 STANZA_LAST_ERROR=""
+STANZA_ERROR_LOG=""
 print_error() {
     STANZA_LAST_ERROR="$1"
     STANZA_HINTS=""
+    if [[ -n "$STANZA_ERROR_LOG" ]]; then
+        printf '%s' "$1" > "$STANZA_ERROR_LOG" 2>/dev/null || true
+    fi
     if should_use_color 2; then
         printf "%b[ERROR]%b %s\n" "$RED" "$NC" "$1" >&2
     else
@@ -829,6 +835,7 @@ STANZA_NET_STALL_BYTES=1000
 git_net() {
     local stall="${STANZA_NET_STALL_SECONDS:-30}"
     [[ "$stall" =~ ^[0-9]+$ ]] || stall=30
+    stall=$((10#$stall))  # 08 is eight seconds, not an octal error
     local opts=()
     if [[ "$stall" -gt 0 ]]; then
         git config --get http.lowSpeedLimit >/dev/null 2>&1 \
@@ -864,24 +871,45 @@ gh_quiet() {
 # the run ends at this call, and the reason must not be discarded with it.
 # Successful calls stay quiet.
 quiet_run() {
-    local status=0
-    if [[ "$VERBOSE" == "true" ]]; then
-        print_progress "$@" || status=$?
-        [[ $status -eq 0 ]] || print_error "$(command_label "$@") failed (exit $status)"
-        return $status
-    fi
-    run_captured "$@"
+    run_reported error "$VERBOSE" "$@"
+}
+
+# quiet_run for a call whose failure the caller recovers from (a push it
+# reports as not done, an optional edit): the failure is reported as a warning,
+# not an error, and STANZA_LAST_ERROR is left alone.
+quiet_try() {
+    run_reported warning "$VERBOSE" "$@"
 }
 
 # Run a command with stdout and stderr captured; on failure print an error
 # naming the command, followed by the captured output. Returns its status.
 run_captured() {
-    local out status=0
-    out=$("$@" 2>&1) || status=$?
-    if [[ $status -ne 0 ]]; then
-        print_error "$(command_label "$@") failed (exit $status)"
-        print_output "$out"
+    run_reported error false "$@"
+}
+
+# Run a command with its output shown live when SHOW is true and captured
+# otherwise. On failure print an [ERROR] (a [WARNING] at LEVEL warning) naming
+# the command, then any captured output. Returns the command's status.
+# Usage: run_reported error|warning true|false cmd [args...]
+run_reported() {
+    local level="$1" show="$2" out="" status=0
+    shift 2
+    if [[ "$show" == "true" ]]; then
+        print_progress "$@" || status=$?
+    else
+        out=$("$@" 2>&1) || status=$?
     fi
+    [[ $status -ne 0 ]] || return 0
+    local message
+    message="$(command_label "$@") failed (exit $status)"
+    if [[ "$level" == "warning" ]]; then
+        # Warnings are silent under --json (see print_warning); so is the output.
+        [[ "$JSON_OUTPUT" != "true" ]] || return $status
+        print_warning "$message"
+    else
+        print_error "$message"
+    fi
+    print_output "$out"
     return $status
 }
 
@@ -916,11 +944,11 @@ print_progress() {
 # Init shows command output from the first verbose tier. Below it, output is
 # captured and printed only if the command fails.
 run_verbose() {
+    local show=false
     if [[ "$VERBOSITY" -ge 2 ]]; then
-        print_progress "$@"
-    else
-        run_captured "$@"
+        show=true
     fi
+    run_reported error "$show" "$@"
 }
 
 # User confirmation with customizable exit message

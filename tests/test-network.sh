@@ -108,6 +108,14 @@ test_stall_seconds_env() {
     assert_eq "no options at 0" "" "$opts"
     opts=$(unset GIT_SSH GIT_SSH_COMMAND; STANZA_NET_STALL_SECONDS=soon git_net_options)
     assert_contains "a non-number falls back to 30" "$opts" "http.lowSpeedTime=30"
+
+    # A leading zero is decimal, not octal (08 is not a bash arithmetic error).
+    local err
+    err=$(unset GIT_SSH GIT_SSH_COMMAND; STANZA_NET_STALL_SECONDS=08 git_net_options 2>&1 >/dev/null)
+    opts=$(unset GIT_SSH GIT_SSH_COMMAND; STANZA_NET_STALL_SECONDS=08 git_net_options 2>/dev/null)
+    assert_contains "08 is a window of 8 seconds" "$opts" "http.lowSpeedTime=8"
+    assert_contains "08 keeps the keepalive" "$opts" "ServerAliveInterval=4"
+    assert_eq "08 prints no arithmetic error" "" "$err"
     cleanup
 }
 
@@ -165,6 +173,36 @@ test_quiet_failure_keeps_output() {
     cleanup
 }
 
+test_verbose_failure_is_named() {
+    echo ""
+    echo "Every wrapper names a failed command, at any verbosity"
+    setup_repo
+    local err
+    err=$(NO_COLOR=1 VERBOSITY=2 run_verbose git checkout no-such-branch 2>&1) || true
+    assert_contains "run_verbose -v names the command" "$err" \
+        "[ERROR] git checkout no-such-branch failed (exit 1)"
+    err=$(NO_COLOR=1 VERBOSE=true git_quiet checkout no-such-branch 2>&1) || true
+    assert_contains "git_quiet -vv names the command" "$err" \
+        "[ERROR] git checkout no-such-branch failed (exit 1)"
+    cleanup
+}
+
+test_quiet_try_warns() {
+    echo ""
+    echo "quiet_try reports a failure the caller recovers from as a warning"
+    setup_repo
+    local err code=0
+    err=$(NO_COLOR=1 quiet_try git checkout no-such-branch 2>&1 >/dev/null) || code=$?
+    assert_eq "returns git's status" "1" "$code"
+    assert_contains "warns naming the command" "$err" \
+        "[WARNING] git checkout no-such-branch failed (exit 1)"
+    assert_contains "keeps git's message, indented" "$err" "    error: pathspec 'no-such-branch'"
+    assert_not_contains "is not an error" "$err" "[ERROR]"
+    assert_eq "records no error" "" \
+        "$(STANZA_LAST_ERROR=""; quiet_try git checkout no-such-branch >/dev/null 2>&1 || true; echo "$STANZA_LAST_ERROR")"
+    cleanup
+}
+
 test_command_label() {
     echo ""
     echo "command_label quotes, flattens, and shortens"
@@ -185,6 +223,8 @@ test_stall_seconds_env
 test_user_config_wins
 test_ssh_receives_keepalive
 test_quiet_failure_keeps_output
+test_verbose_failure_is_named
+test_quiet_try_warns
 test_command_label
 
 echo ""
