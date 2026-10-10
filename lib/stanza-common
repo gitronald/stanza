@@ -6,7 +6,6 @@
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 PURPLE='\033[0;35m'
-BLUE='\033[0;34m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 DIM='\033[2m'
@@ -24,7 +23,7 @@ NC='\033[0m' # No Color
 #
 # VERBOSE (boolean) is retained as a derived flag so existing callers
 # (git_quiet, gh_quiet, scattered "if VERBOSE" checks) keep working
-# until step 2 hoists flag parsing into bin/stanza.
+# alongside global flag parsing in bin/stanza and subcommand flag parsing.
 VERBOSITY="${VERBOSITY:-1}"
 JSON_OUTPUT="${JSON_OUTPUT:-false}"
 NO_COLOR_OVERRIDE="${NO_COLOR_OVERRIDE:-false}"
@@ -141,15 +140,34 @@ print_row_v() {
 
 JSON_BUFFER=""
 
-# Escape a string for JSON output: backslashes, double quotes, common controls.
+# Escape a string for JSON output: backslashes, double quotes, all controls.
+# Bash strings cannot contain NUL; every other byte below 0x20 is escaped.
 json_escape() {
     local s="$1"
+    local LC_ALL=C
     s="${s//\\/\\\\}"
     s="${s//\"/\\\"}"
+    # Ordinary strings avoid the character loop entirely.
+    if [[ "$s" != *[$'\001'-$'\037']* ]]; then
+        printf "%s" "$s"
+        return 0
+    fi
+    s="${s//$'\b'/\\b}"
+    s="${s//$'\f'/\\f}"
     s="${s//$'\n'/\\n}"
     s="${s//$'\r'/\\r}"
     s="${s//$'\t'/\\t}"
-    printf "%s" "$s"
+    local i ch escaped result=""
+    for ((i = 0; i < ${#s}; i++)); do
+        ch="${s:i:1}"
+        if [[ "$ch" == [$'\001'-$'\037'] ]]; then
+            printf -v escaped '\\u%04x' "'$ch"
+            result="$result$escaped"
+        else
+            result="$result$ch"
+        fi
+    done
+    printf "%s" "$result"
 }
 
 # Append a string-valued field. Always emits a quoted JSON string, including
@@ -168,9 +186,9 @@ json_set_or_null() {
     local key="$1"
     local value="${2:-}"
     if [[ -z "$value" ]]; then
-        JSON_BUFFER="${JSON_BUFFER},\"$(json_escape "$key")\":null"
+        json_set_raw "$key" null
     else
-        JSON_BUFFER="${JSON_BUFFER},\"$(json_escape "$key")\":\"$(json_escape "$value")\""
+        json_set "$key" "$value"
     fi
 }
 
@@ -237,12 +255,15 @@ check_command_availability() {
 
 # Standard prerequisites check for release scripts
 # Only requires uv for uv projects; git and gh are always required
+# Pass --without-gh when the run makes no gh calls (e.g. a --local release).
 check_required_commands() {
     check_command_availability git
     if [[ "$(detect_project_type)" == "uv" ]]; then
         check_command_availability uv
     fi
-    check_command_availability gh
+    if [[ "${1:-}" != "--without-gh" ]]; then
+        check_command_availability gh
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -251,7 +272,8 @@ check_required_commands() {
 # Cached project type (set on first call to detect_project_type)
 PROJECT_TYPE=""
 
-# Detect project type: uv (pyproject.toml with version), bash (VERSION file), or none
+# Detect project type: uv (pyproject.toml with version), bash (VERSION file),
+# latex (.cls/.sty with a Provides version line), or none
 detect_project_type() {
     # Return cached value if already detected
     if [[ -n "$PROJECT_TYPE" ]]; then
@@ -319,7 +341,7 @@ get_version_from_latex() {
         print_error "no .cls/.sty file with a \\ProvidesClass/\\ProvidesPackage version line found in $(pwd)"
         exit 1
     fi
-    grep -oE '\[[0-9]{4}/[0-9]{2}/[0-9]{2} v[0-9][^ ]*' "$f" \
+    grep -oE '\[[0-9]{4}/[0-9]{2}/[0-9]{2} v[0-9][^][:space:]]*' "$f" \
         | head -1 \
         | sed -E 's|^\[[0-9]{4}/[0-9]{2}/[0-9]{2} v||'
 }
@@ -335,7 +357,7 @@ set_version_in_latex() {
     fi
     local today
     today=$(date +%Y/%m/%d)
-    sed -E "s|\[[0-9]{4}/[0-9]{2}/[0-9]{2} v[0-9][^ ]*|[$today v$new_ver|" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    sed -E "s|\[[0-9]{4}/[0-9]{2}/[0-9]{2} v[0-9][^][:space:]]*|[$today v$new_ver|" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
 # Validate a LaTeX-style version: 1 to 3 numeric components.
@@ -366,18 +388,18 @@ bump_latex_version_string() {
 
     case "$bump_type" in
         patch)
-            parts[$((n - 1))]=$((parts[n - 1] + 1))
+            parts[n - 1]=$((10#${parts[n - 1]} + 1))
             ;;
         minor)
             if [[ $n -ge 2 ]]; then
-                parts[$((n - 2))]=$((parts[n - 2] + 1))
-                parts[$((n - 1))]=0
+                parts[n - 2]=$((10#${parts[n - 2]} + 1))
+                parts[n - 1]=0
             else
-                parts[0]=$((parts[0] + 1))
+                parts[0]=$((10#${parts[0]} + 1))
             fi
             ;;
         major)
-            parts[0]=$((parts[0] + 1))
+            parts[0]=$((10#${parts[0]} + 1))
             local i
             for ((i = 1; i < n; i++)); do parts[i]=0; done
             ;;
@@ -412,6 +434,10 @@ validate_version_string() {
         print_error "Invalid version string: $version"
         exit 1
     fi
+    if [[ "$version" =~ (^|\.|a)0[0-9]+ ]]; then
+        print_error "Invalid version string: $version (leading zeros are not allowed)"
+        exit 1
+    fi
 }
 
 # Bump a semver version string in pure bash
@@ -436,10 +462,10 @@ bump_version_string() {
         prerelease)
             if [[ -n "$alpha" ]]; then
                 # Already on alpha: increment alpha number
-                echo "${major}.${minor}.${patch}a$((alpha + 1))"
+                echo "${major}.${minor}.${patch}a$((10#$alpha + 1))"
             else
                 # Stable: bump patch, then set alpha=0
-                echo "${major}.${minor}.$((patch + 1))a0"
+                echo "${major}.${minor}.$((10#$patch + 1))a0"
             fi
             ;;
         patch)
@@ -448,14 +474,14 @@ bump_version_string() {
                 echo "${major}.${minor}.${patch}"
             else
                 # Stable: increment patch
-                echo "${major}.${minor}.$((patch + 1))"
+                echo "${major}.${minor}.$((10#$patch + 1))"
             fi
             ;;
         minor)
-            echo "${major}.$((minor + 1)).0"
+            echo "${major}.$((10#$minor + 1)).0"
             ;;
         major)
-            echo "$((major + 1)).0.0"
+            echo "$((10#$major + 1)).0.0"
             ;;
         *)
             print_error "Unknown bump type: $bump_type"
@@ -476,17 +502,18 @@ bump_version_string() {
 # Print the version found in README.md's first H1 title with the leading 'v'
 # stripped, e.g. "# pbz2 v0.2.0" -> "0.2.0". Returns 1 when README.md is absent
 # or the title has no "v<version>" token. The token is a 1-3 component numeric
-# version with an optional alpha suffix at a whitespace boundary, covering both
+# version with an optional alpha suffix, ending at end of line, a character that
+# cannot continue a version, or a sentence-ending period. It covers both
 # semver (0.2.0, 0.2.0a1) and LaTeX-style (1.20) versions.
 get_version_from_readme() {
     [[ -f "README.md" ]] || return 1
     local raw
     raw=$(grep -m1 -E '^#[[:space:]]' README.md 2>/dev/null \
-        | grep -oE '[[:space:]]v[0-9]+(\.[0-9]+)?(\.[0-9]+)?(a[0-9]+)?' \
+        | grep -oE '[[:space:]]v[0-9]+(\.[0-9]+)?(\.[0-9]+)?(a[0-9]+)?($|[^[:alnum:].-]|\.$|\.[^[:alnum:]])' \
         | head -1) || return 1
     [[ -n "$raw" ]] || return 1
-    raw=$(printf '%s' "$raw" | tr -d '[:space:]')   # " v0.2.0" -> "v0.2.0"
-    echo "${raw#v}"
+    # " v0.2.0." -> "0.2.0": keep the version, drop the boundary character
+    printf '%s\n' "$raw" | sed -E 's/^[[:space:]]v([0-9]+(\.[0-9]+)?(\.[0-9]+)?(a[0-9]+)?).*/\1/'
 }
 
 # Rewrite the version token in README.md's first H1 title to "v<version>".
@@ -501,8 +528,11 @@ set_version_in_readme() {
     [[ "$cur" == "$new_ver" ]] && return 1
     awk -v new="$new_ver" '
         !replaced && /^#[ \t]/ {
-            if (match($0, /[ \t]v[0-9]+(\.[0-9]+)?(\.[0-9]+)?(a[0-9]+)?/)) {
-                $0 = substr($0, 1, RSTART) "v" new substr($0, RSTART + RLENGTH)
+            if (match($0, /[ \t]v[0-9]+(\.[0-9]+)?(\.[0-9]+)?(a[0-9]+)?($|[^[:alnum:].-]|\.$|\.[^[:alnum:]])/)) {
+                start = RSTART
+                # Re-match the version alone so the boundary character is kept.
+                match(substr($0, start), /^[ \t]v[0-9]+(\.[0-9]+)?(\.[0-9]+)?(a[0-9]+)?/)
+                $0 = substr($0, 1, start) "v" new substr($0, start + RLENGTH)
                 replaced = 1
             }
         }
@@ -610,40 +640,12 @@ get_current_version() {
 
 # ------------------------------------------------------------------------------
 
-# Check if we're in a git repository
-check_git_repo() {
-    if ! git rev-parse --git-dir > /dev/null 2>&1; then
-        print_error "Not in a git repository"
-        exit 1
-    fi
-}
-
-
 # Check if remote repository exists (returns true/false)
 has_remote() {
     local remote="${1:-origin}"
     git remote get-url "$remote" &> /dev/null
     return $?
 }
-
-# Check and warn if remote doesn't exist
-check_remote_exists() {
-    local remote="${1:-origin}"
-    local require="${2:-false}"
-
-    if ! has_remote "$remote"; then
-        if [ "$require" = "true" ]; then
-            print_error "Remote '$remote' does not exist | git remote add $remote <url>"
-            echo "| use: git remote add $remote <url>"
-            exit 1
-        else
-            print_warning "Remote '$remote' not configured - skipping remote operations"
-            return 1
-        fi
-    fi
-    return 0
-}
-
 
 # Validate that we're on a specific branch
 require_branch() {
@@ -655,17 +657,6 @@ require_branch() {
         echo "Current branch is $current_branch."
         exit 1
     fi
-}
-
-# Check if git branch exists, is active, and has no uncommitted changes
-check_git_branch_exists() {
-    local branch="$1"
-    if [ -z "$branch" ]; then
-        print_error "No branch specified"
-        exit 1
-    fi
-    check_git_repo
-    require_branch "$branch"
 }
 
 # Check for uncommitted changes
@@ -712,7 +703,7 @@ get_branch_status() {
     fi
 
     # Get ahead/behind counts
-    git rev-list --left-right --count HEAD...origin/$branch 2>/dev/null || echo "0 0"
+    git rev-list --left-right --count "HEAD...origin/$branch" 2>/dev/null || echo "0 0"
 }
 
 # Check if branch is up to date with remote
@@ -736,7 +727,7 @@ check_branch_up_to_date() {
 
     # Get ahead/behind counts
     local ahead_behind
-    ahead_behind=$(git rev-list --left-right --count HEAD...origin/$branch 2>/dev/null || echo "0 0")
+    ahead_behind=$(git rev-list --left-right --count "HEAD...origin/$branch" 2>/dev/null || echo "0 0")
     local ahead=$(echo "$ahead_behind" | awk '{print $1}')
     local behind=$(echo "$ahead_behind" | awk '{print $2}')
 
@@ -805,7 +796,7 @@ should_skip_remote() {
 # Usage: git_quiet push origin main
 git_quiet() {
     if [[ "$VERBOSE" == "true" ]]; then
-        git "$@"
+        print_progress git "$@"
     else
         git "$@" > /dev/null 2>&1
     fi
@@ -815,14 +806,36 @@ git_quiet() {
 # Usage: gh_quiet pr merge "$PR_NUMBER" --merge
 gh_quiet() {
     if [[ "$VERBOSE" == "true" ]]; then
-        gh "$@"
+        print_progress gh "$@"
     else
         gh "$@" > /dev/null 2>&1
     fi
 }
 
+# Route human output without interfering with commands that return data.
+print_progress() {
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        "$@" >&2
+    else
+        "$@"
+    fi
+}
+
+# Init shows command output from the first verbose tier.
+run_verbose() {
+    if [[ "$VERBOSITY" -ge 2 ]]; then
+        print_progress "$@"
+    else
+        "$@" >/dev/null 2>&1
+    fi
+}
+
 # User confirmation with customizable exit message
 confirm_step() {
+    print_progress _confirm_step "$@"
+}
+
+_confirm_step() {
     local description="$1"
     local exit_message="${2:-Exiting workflow}"
 

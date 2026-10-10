@@ -123,7 +123,6 @@ verify_installation() {
 # List files that will be removed
 list_files_to_remove() {
     local prefix="$1"
-    local files=()
 
     print_info ""
     print_info "The following will be removed:"
@@ -132,13 +131,11 @@ list_files_to_remove() {
     # Binary
     if [[ -f "$prefix/bin/stanza" ]]; then
         print_info "  - $prefix/bin/stanza"
-        files+=("$prefix/bin/stanza")
     fi
 
     # Library directory
     if [[ -d "$prefix/lib/stanza" ]]; then
         print_info "  - $prefix/lib/stanza/ (entire directory)"
-        files+=("$prefix/lib/stanza")
     fi
 
     # Check for shell completions (common locations)
@@ -160,18 +157,16 @@ list_files_to_remove() {
         completion_files+=("$HOME/.zsh/completions/_stanza")
     fi
 
-    # Display and add completion files if found
+    # Display completion files if found
     if [[ ${#completion_files[@]} -gt 0 ]]; then
         for comp_file in "${completion_files[@]}"; do
             print_info "  - $comp_file"
-            files+=("$comp_file")
         done
     fi
 
     # Claude Code rule, only when stanza generated it
     if is_generated_rule "$CLAUDE_RULE"; then
         print_info "  - $CLAUDE_RULE"
-        files+=("$CLAUDE_RULE")
     fi
 
     print_info ""
