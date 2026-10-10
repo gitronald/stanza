@@ -5,7 +5,7 @@ status: active
 branch: feature/harden-release-network-steps
 created: 2026-10-09T17:17:19-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/8
 ---
 
 # Time out stalled git calls and name the failed release step
@@ -96,3 +96,4 @@ recovery a single command. Item 5 is for callers.
   - Base: `dev` at `9458d33`
   - Worktree: `.worktrees/harden-release-network-steps`
   - PR: pending
+- **2026-10-09T21:57:32-07:00** — PR opened: https://github.com/gitronald/stanza/pull/8
