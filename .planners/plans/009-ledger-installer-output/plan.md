@@ -231,3 +231,8 @@ And for a checksum mismatch (stderr):
   - Checks: all of `tests/` passed (output-modes 50/50, install 110/110).
 - **2026-10-10T14:20:09-07:00** — Implemented: 11 commits ahead of `dev`.
 - **2026-10-10T14:22:14-07:00** — Reactivated: back to active after review.
+- **2026-10-10T14:22:15-07:00** — Removed `print_branch_version` from `lib/stanza-release`, on
+  request. Its only reference was its extraction in
+  `tests/test-release-workflow.sh`'s setup, and nothing it was loaded for
+  called it. `PURPLE` in `lib/stanza-common` had no other user and went
+  with it. All of `tests/` passed afterwards.
