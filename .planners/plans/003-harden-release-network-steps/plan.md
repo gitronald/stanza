@@ -97,3 +97,71 @@ recovery a single command. Item 5 is for callers.
   - Worktree: `.worktrees/harden-release-network-steps`
   - PR: pending
 - **2026-10-09T21:57:32-07:00** — PR opened: https://github.com/gitronald/stanza/pull/8
+- **2026-10-09T21:57:47-07:00** — Items 1 to 5 implemented in `5dfefda`,
+  `fd58526`, `203acfb`. All 7 suites pass (583 tests; 24 new in
+  `tests/test-network.sh`, 87 new assertions in `tests/test-release-workflow.sh`).
+  - **Item 1.** `git_net` in `lib/stanza-common` adds
+    `-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=$STANZA_NET_STALL_SECONDS`
+    (default 30; `0` turns it off; a non-number falls back to 30). A configured
+    `http.lowSpeed*` is left alone, and `GIT_HTTP_LOW_SPEED_*` already beats
+    `-c` inside git. SSH is in scope: `core.sshCommand` with
+    `ServerAliveInterval` at half the window and `ServerAliveCountMax=2`, unless
+    `core.sshCommand`, `GIT_SSH`, or `GIT_SSH_COMMAND` is set. `git_quiet` routes
+    `fetch`/`pull`/`push`/`ls-remote` through it; the other remote calls
+    (`git_tag_version`'s atomic push, the up-to-date fetches, init's pushes) call
+    it directly. A grep of `lib/` finds no remote git call outside it.
+  - **Item 2.** `quiet_run`/`run_captured` capture stdout and stderr, not
+    stderr alone: `git merge` prints its CONFLICT lines on stdout. On failure
+    they print `[ERROR] <command> failed (exit N)` and the output, indented.
+    `run_verbose` (init) does the same below `-v`.
+  - **Item 3.** An EXIT trap, not an ERR trap. ERR is not inherited by
+    functions without `set -E`, and EXIT also covers the explicit `exit 1`
+    paths. Steps call `step_start`/`step_done`; the trap prints
+    `<step>  failed; <what is left>` and `resume: <command>`. An error that
+    printed hints of its own (e.g. the tag-push refusal) keeps them, and the
+    generic resume is left out.
+  - **Item 4.** `find_shipped_release` resumes when dev is on a stable version
+    whose tag exists locally or on origin, or when dev's last commit is the
+    cycle bump that follows its nearest tag. It pushes a tag only this clone
+    has, checks the tag is on the base branch, and runs the cycle. The cycle
+    itself is now idempotent: no bump when dev is already on a prerelease, no
+    push when `origin/dev` matches. A merge-step failure after the PR merged
+    (no tag yet) is not auto-resumed; its hint tags by hand, then resumes.
+  - **Item 5.** Failure JSON: `ok:false`, `failed_step` (`preflight` before
+    the first step), `completed_steps`, `error`, `resume`, `hint`. Success
+    documents gained `ok:true`, and `merge` gained `resumed`. Documented in
+    `stanza guide`, the README, and the CHANGELOG.
+  - **Beyond the plan.** Error details from `require_branch`,
+    `check_uncommitted_changes`, `check_not_protected_branch`, and the gh login
+    check moved from stdout to stderr, since the failure JSON shares stdout. A
+    failed `--pr-note` edit now warns that the release continues.
+  - **Stall test.** A local TCP server (via `uv run --no-project python`) that
+    accepts and never answers. A post-receive hook on the bare remote points
+    `origin`'s fetch URL at it once the tag lands, so the cycle's
+    `git pull origin dev` is the stalled call. With
+    `STANZA_NET_STALL_SECONDS=2`, the run stopped in about 2 seconds with
+    git's "Operation too slow" and the `cycle` row; `release merge` then
+    finished the cycle, and a second re-run changed nothing.
+  - **Not verified:** bash 3.2 (no 3.2 on this host; plan 005 adds the CI
+    job), ShellCheck (not installed here), SSH keepalives against a live
+    stalled SSH server (the test only checks that git hands the options to
+    ssh), and a run against real GitHub.
+
+## Handoff
+
+State: implemented and pushed on `feature/harden-release-network-steps`; PR
+#8 waits on review. Nothing is uncommitted.
+
+Open questions (not blocking review):
+
+1. Should a merge-step failure after the PR has merged (no tag yet) resume
+   automatically? It would need to find the PR's merge commit on the base
+   branch (the merge whose second parent is dev's head) and tag it. Today the
+   hint does it by hand.
+2. Should `stanza release pr` resume after a failed `push` or `pr` step (dev
+   already on the stable version, no open PR)? Today the hints give the
+   commands.
+3. For plan 004: its proposed `{"ok":false,"phase":"preflight",...}` clashes
+   with the existing `phase` field (`pr`/`merge`). This plan already emits
+   `"failed_step":"preflight"` for refusals before the first step; 004 can add
+   its `errors` array to that document.
