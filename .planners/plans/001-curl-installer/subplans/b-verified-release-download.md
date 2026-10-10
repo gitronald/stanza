@@ -89,3 +89,19 @@ fixed.
   Decision from the umbrella: no stable release of the one-line installer
   without checksum verification, so this is no longer optional follow-up
   work. Open questions 1-3 are in the umbrella's Handoff.
+- **2026-10-10T12:50:04-07:00** — Activated. Open questions answered by
+  the user (umbrella Handoff, questions 1-3):
+  1. Opt-in: avoided. The asset is not built by `stanza release` at all. A
+     script in this repo, `scripts/release-asset.sh <tag>`, builds it, and a
+     tag-triggered GitHub Actions workflow runs the script. `stanza release`
+     is unchanged and other repos get nothing new. This replaces steps 1-2
+     of the spec: the script is idempotent (creates the release only when
+     missing, uploads only missing assets), which is the resumability step 2
+     asked for, and the workflow can be re-run by hand with a tag.
+  2. Old tags (v1.1.3 and earlier): refused. The installer fails with a
+     pointer to the clone path; no assets are backfilled.
+  3. Signing: no. Checksum only; the README says what that does not
+     defend against.
+  Correction against the branch as it stands: the release-workflow test in
+  the spec ("mock `gh`, as the existing release tests do") becomes a test of
+  the script, not of `stanza release`.
