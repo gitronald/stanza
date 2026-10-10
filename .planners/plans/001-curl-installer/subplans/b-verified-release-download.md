@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 branch:
 needs: [a]
 ---
@@ -105,3 +105,41 @@ fixed.
   Correction against the branch as it stands: the release-workflow test in
   the spec ("mock `gh`, as the existing release tests do") becomes a test of
   the script, not of `stanza release`.
+- **2026-10-10T12:55:16-07:00** — Implemented (commits `5e16f74`,
+  `d321f2f`, `c71a34d`, `a421a09`).
+  - `scripts/release-asset.sh <tag>` builds `stanza-<version>.tar.gz`
+    (`git archive --prefix=stanza-<version>/`) and its `.sha256` in
+    `sha256sum` format. With no release it runs `gh release create
+    --verify-tag` with both files and the tag's CHANGELOG section as notes.
+    On an existing release it uploads only what is missing. A published
+    tarball is downloaded and checksummed, never rebuilt, because `git
+    archive`'s gzip bytes can change between git versions. A published
+    checksum that disagrees is an error. `--out DIR` builds only, with no
+    GitHub calls. Only `vX.Y.Z` tags are accepted.
+  - `.github/workflows/release-asset.yml` runs the script on a `v*.*.*`
+    tag push, or by hand (`workflow_dispatch`, input `tag`). It needs
+    `contents: write`, and `actions/checkout` is pinned to the v7.0.1
+    commit SHA. The tag input reaches the script through `env`, not inline.
+  - `install.sh` fetch mode downloads
+    `releases/download/v<v>/stanza-<v>.tar.gz` and `.sha256`, and refuses
+    to install on a missing asset (pointing at `git clone --branch`), a
+    missing or malformed checksum, or a mismatch. It uses `sha256sum`, or
+    `shasum -a 256` where that is missing (macOS), and the dependency check
+    names the pair. Help and README examples now say `X.Y.Z`, because
+    `1.1.3` is a refused tag.
+  - README: the security paragraph says what the checksum does and does
+    not defend against, and names the workflow and the window after a tag
+    push before the asset exists.
+  - Tests: `tests/test-install.sh` builds the stand-in's assets with the
+    real script (`--out`) and adds cases for no asset, a flipped byte, a
+    missing `.sha256`, a malformed `.sha256`, and the `shasum` fallback
+    (50 pass). New `tests/test-release-asset.sh` runs the script over a
+    `gh` mock: build only, create, a re-run that does nothing, only the
+    tarball published (from a different gzip level), no assets, a
+    mismatched checksum, a prerelease tag, and an unknown tag (27 pass).
+    The other seven suites were run on the same tree and all pass.
+  - Not verified: the workflow on GitHub (it first runs on the next stable
+    tag; `workflow_dispatch` works only once the file is on `main`); real
+    `gh release` calls; the installer against a real release download,
+    which redirects to another host. No shellcheck or actionlint on this
+    machine; the workflow YAML was only parsed.

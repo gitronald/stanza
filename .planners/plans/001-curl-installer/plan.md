@@ -36,7 +36,7 @@ who wants to read what they are about to run.
 | Subplan | Scope | Status | Note |
 |---|---|---|---|
 | [a](subplans/a-fetch-mode.md) | Install from the tag archive when piped | done |  |
-| [b](subplans/b-verified-release-download.md) | Verify the installer's download with a checksummed release asset | active |  |
+| [b](subplans/b-verified-release-download.md) | Verify the installer's download with a checksummed release asset | done |  |
 <!-- planners:subplans:end -->
 
 ### Options
@@ -218,21 +218,30 @@ Plan 008, written as the follow-up, is retired into this plan.
   - The Recommendation keeps its intro and its deferral of C, with the
     revision appended below it.
 
+- **2026-10-10T12:55:16-07:00** — Subplan b implemented and done (commits
+  `5e16f74`, `d321f2f`, `c71a34d`, `a421a09`). Questions 1-3 answered: the
+  asset is built by `scripts/release-asset.sh` from a tag-triggered workflow,
+  so `stanza release` is unchanged and needs no opt-in; old tags are refused;
+  no signing. Detail in [subplan b](subplans/b-verified-release-download.md)'s
+  Log.
+
 ## Handoff
 
-- State: subplan a (fetch-mode installer, review fixes, one-liner hardening)
-  is done, committed, and pushed on `feature/curl-installer` in PR #9.
-  Subplan b is a draft. PR #9 carries both, so it stays open until b lands.
-- Release gate: no stable release until b is done. The README's one-liner
-  fetches `install.sh` from `main`, so the first stable release with this
-  change is the one that turns the one-liner on, and it must ship the
-  checksummed asset.
-- Open questions (all for b):
-  1. Is the release-asset step in `stanza release` on for every repo, or
-     opt-in (a config flag, or the presence of an `install.sh`)?
-  2. Tags without an asset (v1.1.3 and earlier): backfill assets, or refuse
-     them? An unverified fallback would contradict the release gate.
-  3. Sign the checksum (minisign or `ssh-keygen -Y`), or checksum only?
-- Not verified: the plan's fresh-container run (subplan a's Verification),
-  and a real HTTPS redirect against `--proto-redir '=https'`.
-- PR #9 is back in draft until b is done.
+- State: subplans a and b are done, committed on `feature/curl-installer`,
+  and carried by PR #9.
+- Release gate: the first stable release after this merges is the one that
+  turns the one-liner on (it fetches `install.sh` from `main`). Its tag push
+  runs the `release-asset` workflow, which must succeed. Check the release
+  has `stanza-<version>.tar.gz` and `.sha256`, then run the one-liner against
+  it. If the workflow fails, re-run it from the Actions tab with the tag, or
+  run `scripts/release-asset.sh v<version>` locally.
+- Questions (all settled 2026-10-10, see subplan b's Log):
+  1. Opt-in for the release-asset step: avoided. A workflow in this repo
+     builds it, and `stanza release` is unchanged.
+  2. Tags without an asset (v1.1.3 and earlier): refused, with a pointer to
+     the clone path.
+  3. Signing: no, checksum only; the README says what that does not cover.
+- Not verified: the workflow and `gh release` calls on GitHub (first run is
+  the next stable tag); the installer against a real release download; the
+  fresh-container run from subplan a's Verification; a real HTTPS redirect
+  against `--proto-redir '=https'`.
