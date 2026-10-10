@@ -213,3 +213,55 @@ have Homebrew.
   - Worktree: `.worktrees/curl-installer`
   - PR: pending
 - **2026-10-10T11:38:17-07:00** — PR opened: https://github.com/gitronald/stanza/pull/9
+- **2026-10-10T11:38:17-07:00** — Implemented option B (commits `c2941fd`, `d5b4419`).
+  - `install.sh`: fetch mode, `-y/--yes`, `--version[=]TAG` (also
+    `STANZA_VERSION`), and `STANZA_REPO_URL` (defaults to the GitHub repo;
+    exists so tests can point at a local stand-in). Fetch mode runs when the
+    script is not a file inside a checkout, or when a version is given (so
+    `./install.sh --version 1.0.0` from a checkout downloads that tag). The
+    archive goes to `mktemp -d` and is removed by an `EXIT` trap.
+  - Deviation: the default tag comes from `git ls-remote --tags` (highest
+    `vX.Y.Z` with no prerelease suffix, compared numerically), not the GitHub
+    API. The repo has tags but no GitHub releases, so `releases/latest` 404s,
+    and git is already a required dependency with no API rate limit. There is
+    no `VERSION` fallback: a piped script has no local `VERSION`, and when
+    ls-remote cannot reach GitHub the archive download would fail too. The
+    error names `--version` instead.
+  - Confirmation reads the terminal (`/dev/tty`) only when the script itself
+    arrived on stdin. Run from a file, it reads stdin as before, so
+    `printf y | ./install.sh` (used by `tests/test-rules.sh`) keeps working.
+    The first cut used `/dev/tty` whenever stdin was not a terminal, and it
+    broke that suite.
+  - Found while testing: inside a function, a piped script's
+    `BASH_SOURCE[0]` is `bash`, not empty. The script path is now read once at
+    top level (`SCRIPT_PATH`), so a file named `bash` in the working
+    directory cannot pass for a checkout.
+  - README leads with the one-liner, the pinned and `--yes` forms, and the
+    download-read-run alternative. It says that only TLS checks the download.
+    The clone path is kept as "From a Clone". Also added: uninstall without a
+    clone (download `uninstall.sh`, run it; checked to work outside a checkout).
+  - Verification: the new `tests/test-install.sh` (29 checks, offline, uses
+    a `file://` stand-in remote) covers the clone path, piped latest
+    (prerelease ignored, `1.10.0` > `1.9.0`), pins by flag and env, temp-dir
+    cleanup, a missing tag, an invalid tag, an unreachable remote, piping
+    with no terminal and no `--yes`, `printf y|n` from a file, and
+    truncation at every 97th byte up to the last line. A scratch mutant with
+    a mid-file call confirmed that the truncation check can fail. All 8
+    suites pass. By hand: piped against the real GitHub repo installed
+    v1.1.3 with completions; under a pty, a piped run without `--yes`
+    prompted on the terminal and installed.
+  - Not verified: the fresh-container run from the plan's Verification
+    section. The checks ran in temp `HOME`/`TMPDIR` directories on a
+    machine that already had git, gh, and uv.
+
+## Handoff
+
+- State: implemented and pushed on `feature/curl-installer`; PR #9.
+- The README's one-liner fetches `install.sh` from `main`. It works only
+  after a stable release carries this change to `main`. Until then, the
+  `main` copy is the old installer, which fails when piped.
+- Not done, by design (see Recommendation): release asset plus checksum
+  (option C) and package managers (D). There is no follow-up plan for C yet.
+- Known gap: a cut exactly after the final `main` (before ` "$@"`) would run
+  `main` with no arguments. That is a default install, which still asks for
+  confirmation or fails without a terminal, so it was left as is.
