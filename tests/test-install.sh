@@ -446,6 +446,12 @@ echo "Color under a terminal"
 if script --version 2> /dev/null | grep -q util-linux; then
     # util-linux script(1) gives the command a pseudo-terminal
     in_pty() { script -qec "$1" /dev/null 2>&1; }
+elif [[ "$(uname -s)" == Darwin ]]; then
+    # BSD script(1) on macOS: the command follows the typescript file; it
+    # needs a real stdin to attach the pty to, so give it /dev/null
+    in_pty() { script -q /dev/null /bin/bash -c "$1" < /dev/null 2>&1; }
+fi
+if declare -f in_pty > /dev/null; then
     setup
     out=$(in_pty "env -u NO_COLOR TERM=xterm '$INSTALLER' --yes")
     assert_eq "terminal: colored" "yes" "$(esc_state "$out")"
@@ -456,7 +462,7 @@ if script --version 2> /dev/null | grep -q util-linux; then
     out=$(in_pty "env -u NO_COLOR TERM=dumb '$INSTALLER' --yes")
     assert_eq "terminal, TERM=dumb: no ESC byte" "no" "$(esc_state "$out")"
 else
-    echo "  SKIP: util-linux script not available"
+    echo "  SKIP: no script(1) here can give the installer a pty"
 fi
 
 echo "Helpers match lib/stanza-common"
