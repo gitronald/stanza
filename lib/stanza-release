@@ -218,7 +218,7 @@ print_doc_sync_rows() {
 }
 
 
-# Bump version using uv and return new version
+# Bump version using the detected project type and return new version
 bump_version() {
     local bump_type="$1"
     local old_version=$(get_current_version)
@@ -259,7 +259,7 @@ bump_version() {
     echo "$new_version"
 }
 
-# Set specific version using uv and return new version
+# Set specific version using the detected project type and return new version
 set_version() {
     local target_version="$1"
     local old_version=$(get_current_version)
@@ -320,7 +320,6 @@ NO_CHANGELOG=false
 RELEASE_README_SYNCED=false
 RELEASE_CHANGELOG_PROMOTED=false
 VERBOSE="${VERBOSE:-false}"
-PR_URL=""
 NO_PR=false
 
 # Detect a leading phase token (pr|merge) before the bump-type parser.
@@ -700,7 +699,6 @@ gh_create_pr() {
         exit 1
     fi
     RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url')
-    PR_URL="$RELEASE_PR_URL"  # back-compat for any callers
 
     # Append the note to the PR body, if one was given. --fill already set a
     # commit-derived body; we read it back and append rather than pass --body
@@ -760,7 +758,6 @@ gh_merge_pr() {
     fi
 
     RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
-    PR_URL="$RELEASE_PR_URL"  # back-compat for any callers
     confirm_step "2: Merge PR #$RELEASE_PR_NUMBER from dev into $BASE_BRANCH"
     gh_quiet pr merge "$RELEASE_PR_NUMBER" --merge \
         --subject "version [release]: $version_tag - PR #$RELEASE_PR_NUMBER" --body ""
@@ -853,7 +850,8 @@ run_prerelease_cycle_or_skip() {
 # same pr object as before.
 json_set_pr_field() {
     if [[ -n "$RELEASE_PR_NUMBER" ]]; then
-        local obj="{\"number\":$RELEASE_PR_NUMBER,\"url\":\"$(json_escape "$RELEASE_PR_URL")\""
+        local obj
+        obj="{\"number\":$RELEASE_PR_NUMBER,\"url\":\"$(json_escape "$RELEASE_PR_URL")\""
         if [[ -n "$PR_NOTE" ]]; then
             obj="${obj},\"note\":\"$(json_escape "$PR_NOTE")\""
         fi
