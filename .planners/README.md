@@ -3,6 +3,8 @@
 | # | Plan | Status | Concluded | PR |
 |---|---|---|---|---|
 | 001 | [Add a one-line install path that does not require a clone](plans/001-curl-installer/plan.md) | implemented | — | [#9](https://github.com/gitronald/stanza/pull/9) |
+| 001 | [Add a one-line install path that does not require a clone](plans/001-curl-installer/plan.md) | active | — | — |
+| 008 | [Verify the installer's download with a checksummed release asset](plans/008-verified-release-download/plan.md) | draft | — | — |
 | 007 | [Resume a release that stopped before its tag](plans/007-resume-earlier-release-steps/plan.md) | draft | — | — |
 | 006 | [Research porting stanza to a Python uv tool](plans/006-python-uv-port/plan.md) | draft | — | — |
 | 005 | [Add CI with an output-mode matrix and a bash 3.2 job](plans/005-ci-output-contract/plan.md) | draft | — | — |
