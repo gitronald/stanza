@@ -1,8 +1,8 @@
 ---
 id: 2
 slug: release-without-pr
-status: draft
-branch:
+status: active
+branch: feature/release-without-pr
 created: 2026-10-09T14:47:27-07:00
 concluded:
 pr:
@@ -80,3 +80,11 @@ rejected push leaves no tag on the remote.
 - Tests: a no-PR release against a local bare remote, and the
   branch-protection refusal.
 - Docs: `stanza release --help`, `stanza guide`, and the generated rules text.
+
+## Log
+
+- **2026-10-09T17:19:48-07:00** — Activated.
+  - Branch: `feature/release-without-pr`
+  - Base: `dev` at `0f6d5ef`
+  - Worktree: `.worktrees/release-without-pr`
+  - PR: pending
