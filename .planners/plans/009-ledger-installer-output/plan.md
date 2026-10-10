@@ -1,7 +1,7 @@
 ---
 id: 9
 slug: ledger-installer-output
-status: active
+status: implemented
 branch: feature/ledger-installer-output
 created: 2026-10-10T13:53:07-07:00
 concluded:
@@ -236,3 +236,4 @@ And for a checksum mismatch (stderr):
   `tests/test-release-workflow.sh`'s setup, and nothing it was loaded for
   called it. `PURPLE` in `lib/stanza-common` had no other user and went
   with it. All of `tests/` passed afterwards.
+- **2026-10-10T14:22:18-07:00** — Implemented: 15 commits ahead of `dev`.
