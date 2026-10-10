@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The release tag is pushed with its base branch in one `git push --atomic`, and
   only that tag is pushed (previously `--tags` pushed every local tag).
+  When that push fails, the error shows git's output (the remote's reason) and
+  names the steps to finish the release, including the dev cycle.
 
 ## [1.1.1] - 2026-09-27
 

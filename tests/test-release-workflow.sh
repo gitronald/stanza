@@ -690,6 +690,86 @@ HOOK
         "$(git --git-dir="$TEST_TMPDIR/remote.git" show dev:VERSION)"
     assert_contains "hints the PR recovery" "$err" "stanza release merge"
     assert_contains "hints resetting the base branch" "$err" "git branch -f main origin/main"
+    assert_contains "shows the remote's refusal" "$err" "remote: main is protected"
+
+    teardown_remote_repo
+}
+
+test_no_pr_merge_phase_protected_skips_pr_create() {
+    echo ""
+    echo "merge --no-pr refused after 'release pr': the hint does not reopen a PR"
+    setup_remote_repo
+
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
+#!/bin/bash
+[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }
+exit 0
+HOOK
+    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+
+    local err exit_code=0
+    err=$(NO_COLOR=1 "$STANZA" release merge -y --no-pr 2>&1) || exit_code=$?
+    assert_eq "exits non-zero" "1" "$exit_code"
+    assert_not_contains "no gh pr create hint" "$err" "gh pr create"
+    assert_contains "hints the merge recovery" "$err" "stanza release merge"
+
+    teardown_remote_repo
+}
+
+test_no_pr_diverged_base_hint() {
+    echo ""
+    echo "--no-pr with a diverged base branch: the hint returns to dev first"
+    setup_remote_repo
+
+    git checkout -q main
+    git commit -q --allow-empty -m "local only"
+    git checkout -q -b remote-side origin/main
+    git commit -q --allow-empty -m "remote only"
+    git push -q origin remote-side:main
+    git checkout -q dev
+    git branch -q -D remote-side
+
+    local err exit_code=0
+    err=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || exit_code=$?
+    assert_eq "exits non-zero" "1" "$exit_code"
+    assert_contains "hint checks out dev before the merge phase" "$err" \
+        "git checkout dev && stanza release merge --no-pr"
+
+    teardown_remote_repo
+}
+
+test_no_pr_ignored_by_prerelease() {
+    echo ""
+    echo "prerelease --no-pr warns and the header does not claim 'no PR'"
+    setup_remote_repo
+
+    local out
+    out=$(NO_COLOR=1 "$STANZA" release prerelease -y --no-pr 2>&1)
+    assert_contains "warns --no-pr is ignored" "$out" "--no-pr is ignored by prerelease"
+    assert_not_contains "header lacks 'no PR'" "$out" ", no PR"
+
+    teardown_remote_repo
+}
+
+test_pr_path_push_failure_hints_dev_cycle() {
+    echo ""
+    echo "PR release whose tag push is refused: the hint covers the dev cycle"
+    setup_remote_repo
+
+    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
+#!/bin/bash
+[[ "$1" == refs/tags/* ]] && { echo "tags are refused" >&2; exit 1; }
+exit 0
+HOOK
+    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+
+    local err exit_code=0
+    err=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || exit_code=$?
+    assert_eq "exits non-zero" "1" "$exit_code"
+    assert_contains "shows the remote's refusal" "$err" "remote: tags are refused"
+    assert_contains "hints the retry" "$err" "git push --atomic origin main refs/tags/v0.1.0"
+    assert_contains "hints the dev cycle" "$err" "stanza release prerelease -y"
 
     teardown_remote_repo
 }
@@ -736,6 +816,10 @@ test_no_pr_full_release
 test_no_pr_merge_phase
 test_no_pr_protected_base_pushes_nothing
 test_no_pr_ignored_flags_warn
+test_no_pr_merge_phase_protected_skips_pr_create
+test_no_pr_diverged_base_hint
+test_no_pr_ignored_by_prerelease
+test_pr_path_push_failure_hints_dev_cycle
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

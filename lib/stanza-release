@@ -68,18 +68,31 @@ git_tag_version() {
     # Push to remote if not in local-only mode. --atomic: the remote updates
     # both refs or neither, so a refused base branch (e.g. a protected branch
     # under --no-pr) never leaves the tag pushed without its release merge.
+    # The push output is kept so a refusal shows the remote's reason.
     if ! should_skip_remote; then
-        if ! git_quiet push --atomic origin "$BASE_BRANCH" "refs/tags/$version"; then
+        local push_out
+        if push_out=$(git push --atomic origin "$BASE_BRANCH" "refs/tags/$version" 2>&1); then
+            if [[ "$VERBOSE" == "true" ]]; then printf '%s\n' "$push_out"; fi
+        else
             print_error "push of $BASE_BRANCH and tag $version to origin failed; neither was pushed"
+            printf '%s\n' "$push_out" | sed 's/^/    /' >&2
             if [[ "$NO_PR" == "true" ]]; then
                 git tag -d "$version" > /dev/null
                 print_hint "the bump is already on origin/dev; the local tag $version was removed"
                 print_hint "if $BASE_BRANCH is protected, release through a PR instead:"
                 print_hint "  git checkout dev && git branch -f $BASE_BRANCH origin/$BASE_BRANCH"
-                print_hint "  gh pr create --base $BASE_BRANCH --head dev --title $version --fill"
+                # The merge phase follows 'release pr', whose PR is still open.
+                if [[ "$PHASE" != "merge" ]]; then
+                    print_hint "  gh pr create --base $BASE_BRANCH --head dev --title $version --fill"
+                fi
                 print_hint "  stanza release merge"
             else
                 print_hint "retry: git push --atomic origin $BASE_BRANCH refs/tags/$version"
+                if [[ "$NO_DEV_PRERELEASE" != "true" ]]; then
+                    local finish_cycle="stanza release prerelease -y"
+                    [[ "$PROJECT_TYPE_DETECTED" == "latex" ]] && finish_cycle="git push origin dev"
+                    print_hint "then open the dev cycle: git checkout dev && git pull && git merge $BASE_BRANCH --no-edit && $finish_cycle"
+                fi
             fi
             exit 1
         fi
@@ -532,22 +545,32 @@ if [[ "$BUMP_TYPE" == "prerelease" ]]; then
 else
     HEADER_CONTEXT="$CURRENT_BRANCH -> $BASE_BRANCH, $PROJECT_TYPE_DETECTED"
 fi
-[[ "$LOCAL_ONLY" == "true" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, local"
-[[ "$NO_PR" == "true" && "$PHASE" != "pr" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, no PR"
-print_header "release $CMD_LABEL" "$HEADER_CONTEXT"
-print_row_v checks "branch=$CURRENT_BRANCH, project=$PROJECT_TYPE_DETECTED, phase=$PHASE, yes=$YES_TO_ALL"
 
-# --no-pr changes only the merge step. The pr phase exists to open a PR, so the
-# flag is ignored there; with no PR, a --pr-note has nothing to attach to.
-if [[ "$NO_PR" == "true" && "$BUMP_TYPE" != "prerelease" ]]; then
-    if [[ "$PHASE" == "pr" ]]; then
-        print_warning "--no-pr is ignored by 'release pr', which opens a PR"
+# --no-pr changes only the merge step. A prerelease opens no PR and the pr phase
+# exists to open one, so the flag is ignored there; with no PR, a --pr-note has
+# nothing to attach to. Settled before the header, which reports NO_PR; the
+# warnings print after it.
+NO_PR_WARNINGS=()
+if [[ "$NO_PR" == "true" ]]; then
+    if [[ "$BUMP_TYPE" == "prerelease" ]]; then
+        NO_PR_WARNINGS+=("--no-pr is ignored by prerelease, which opens no PR")
+        NO_PR=false
+    elif [[ "$PHASE" == "pr" ]]; then
+        NO_PR_WARNINGS+=("--no-pr is ignored by 'release pr', which opens a PR")
         NO_PR=false
     elif [[ -n "$PR_NOTE" ]]; then
-        print_warning "--pr-note is ignored with --no-pr (no PR is opened)"
+        NO_PR_WARNINGS+=("--pr-note is ignored with --no-pr (no PR is opened)")
         PR_NOTE=""
     fi
 fi
+
+[[ "$LOCAL_ONLY" == "true" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, local"
+[[ "$NO_PR" == "true" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, no PR"
+print_header "release $CMD_LABEL" "$HEADER_CONTEXT"
+print_row_v checks "branch=$CURRENT_BRANCH, project=$PROJECT_TYPE_DETECTED, phase=$PHASE, yes=$YES_TO_ALL"
+for _warning in "${NO_PR_WARNINGS[@]}"; do
+    print_warning "$_warning"
+done
 
 # ------------------------------------------------------------------------------
 
@@ -755,19 +778,22 @@ git_merge_dev_into_main() {
     local version_tag="$1"
     confirm_step "2: Merge dev into $BASE_BRANCH"
     git_quiet checkout "$BASE_BRANCH"
+    local mode="local"
     if ! should_skip_remote; then
+        mode="no PR"
         if ! git_quiet pull --ff-only origin "$BASE_BRANCH"; then
             print_error "could not fast-forward $BASE_BRANCH to origin/$BASE_BRANCH" \
-                "reconcile $BASE_BRANCH with origin/$BASE_BRANCH, then run 'stanza release merge --no-pr'"
+                "reconcile $BASE_BRANCH with origin/$BASE_BRANCH, then: git checkout dev && stanza release merge --no-pr"
             exit 1
         fi
     fi
     git_quiet merge dev --no-ff -m "version [release]: $version_tag"
-    if should_skip_remote; then
-        print_row merge "dev into $BASE_BRANCH (local)"
-    else
-        print_row merge "dev into $BASE_BRANCH (no PR)"
-    fi
+    print_row merge "dev into $BASE_BRANCH ($mode)"
+}
+
+# True when the release merges through a GitHub PR: remote mode without --no-pr.
+release_uses_pr() {
+    ! should_skip_remote && [[ "$NO_PR" != "true" ]]
 }
 
 # Step 3: Create new prerelease version cycle on dev
@@ -849,7 +875,7 @@ fi
 
 # For non-prerelease releases, check GitHub authentication (a --no-pr full or
 # merge run makes no gh calls)
-if [[ "$BUMP_TYPE" != "prerelease" && "$NO_PR" != "true" ]] && ! should_skip_remote; then
+if [[ "$BUMP_TYPE" != "prerelease" ]] && release_uses_pr; then
     if ! gh auth status &>/dev/null; then
         print_error "GitHub CLI is not authenticated"
         echo ""
@@ -872,7 +898,7 @@ case "$PHASE" in
         create_version_bump_on_dev
         version_tag="v$(get_current_version)"
         RELEASE_VERSION=$(get_current_version)
-        if ! should_skip_remote && [[ "$NO_PR" != "true" ]]; then
+        if release_uses_pr; then
             gh_create_pr "$version_tag"
             gh_merge_pr "$version_tag" "$RELEASE_PR_NUMBER"
         else
@@ -945,7 +971,7 @@ case "$PHASE" in
     merge)
         # Phase 2: merge the open PR (or merge dev directly), tag, new cycle.
         check_uncommitted_changes
-        if ! should_skip_remote && [[ "$NO_PR" != "true" ]]; then
+        if release_uses_pr; then
             # Derive the tag from the target PR's title; fall back to current.
             _merge_pr="${MERGE_PR_NUMBER:-$(gh_get_last_open_pr_number)}"
             if [[ -n "$_merge_pr" ]]; then
