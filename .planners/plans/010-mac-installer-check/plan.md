@@ -1,8 +1,8 @@
 ---
 id: 10
 slug: mac-installer-check
-status: draft
-branch:
+status: active
+branch: feature/mac-installer-check
 created: 2026-10-10T13:59:48-07:00
 concluded:
 pr:
