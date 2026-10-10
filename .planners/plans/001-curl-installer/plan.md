@@ -1,8 +1,8 @@
 ---
 id: 1
 slug: curl-installer
-status: draft
-branch:
+status: active
+branch: feature/curl-installer
 created: 2026-10-08T17:47:56-07:00
 concluded:
 pr:
@@ -204,3 +204,11 @@ have Homebrew.
 - Piped with no `--yes` and no tty: exits non-zero with the hint; with
   `--yes`: installs.
 - The clone path (`./install.sh` inside a checkout) behaves exactly as before.
+
+## Log
+
+- **2026-10-10T11:32:23-07:00** — Activated.
+  - Branch: `feature/curl-installer`
+  - Base: `dev` at `6716cbd`
+  - Worktree: `.worktrees/curl-installer`
+  - PR: pending
