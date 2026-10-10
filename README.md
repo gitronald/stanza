@@ -71,7 +71,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronal
 Pin a version, or skip the confirmation prompt (required when there is no
 terminal to answer it, e.g. in a provisioning script):
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=1.1.3
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=X.Y.Z
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --yes
 ```
 
@@ -82,14 +82,25 @@ less install.sh
 bash install.sh
 ```
 
-Run outside a checkout, `install.sh` downloads the tagged release's source
-archive from GitHub to a temporary directory, installs from it, and removes
-it. The download is checked only by TLS; there is no separate checksum or
-signature. `--proto '=https' --tlsv1.2` makes curl refuse anything but HTTPS
-(TLS 1.2 or later) when fetching the script, and the script refuses a
-redirect off HTTPS when fetching the archive. The script defines everything
-in functions and calls them on its last line, so a download cut off midway
-runs nothing. It never uses `sudo` itself. To upgrade, rerun the same line.
+Run outside a checkout, `install.sh` downloads the release's asset,
+`stanza-<version>.tar.gz`, and its `.sha256` from the GitHub release to a
+temporary directory, refuses to go on unless the two match, installs from
+the asset, and removes the directory. Releases before the first one with an
+asset (v1.1.3 and earlier) are refused; install those from a clone
+(`git clone --branch vX.Y.Z ...`). The checksum catches a corrupted or
+truncated download and an asset replaced on its own. It does not defend
+against a compromised GitHub account, since whoever can replace the asset
+can replace the checksum beside it; it is not a signature.
+`--proto '=https' --tlsv1.2` makes curl refuse anything but HTTPS (TLS 1.2
+or later) when fetching the script, and the script refuses a redirect off
+HTTPS when fetching the asset. The script defines everything in functions
+and calls them on its last line, so a download cut off midway runs nothing.
+It never uses `sudo` itself. To upgrade, rerun the same line.
+
+The asset is built by `scripts/release-asset.sh`, which the `release-asset`
+GitHub Actions workflow runs on every stable tag that `stanza release`
+pushes. For a minute or two after a release, while that runs, the newest
+tag has no asset yet and the installer says to retry.
 
 When `~/.claude` exists, `install.sh` also installs the
 [Claude Code rule](#claude-code-rule); pass `--no-rules` to skip it.
@@ -428,6 +439,7 @@ The stanza tool is organized as follows:
 - `completions/` - Shell completion files for bash and zsh
 - `tests/` - Version bump test suite
 - `install.sh` / `uninstall.sh` - Installation scripts
+- `scripts/release-asset.sh` - Builds and publishes the installer's release asset (run by `.github/workflows/release-asset.yml`)
 
 ### Compatibility Notes
 
