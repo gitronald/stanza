@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `stanza release <type> --no-pr` (and `release merge --no-pr`) merges `dev`
+  into the base branch directly, without a PR, while keeping every remote step.
+  A protected base branch refuses the push, and the error names the recovery.
+
+### Changed
+
+- The release tag is pushed with its base branch in one `git push --atomic`, and
+  only that tag is pushed (previously `--tags` pushed every local tag).
+
 ## [1.1.1] - 2026-09-27
 
 ### Added
