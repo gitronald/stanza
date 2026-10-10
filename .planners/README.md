@@ -2,6 +2,8 @@
 
 | # | Plan | Status | Concluded | PR |
 |---|---|---|---|---|
+| 005 | [Add CI with an output-mode matrix and a bash 3.2 job](plans/005-ci-output-contract/plan.md) | draft | — | — |
+| 004 | [Check release preconditions before the first mutation](plans/004-release-preflight/plan.md) | draft | — | — |
 | 003 | [Time out stalled git calls and name the failed release step](plans/003-harden-release-network-steps/plan.md) | draft | — | — |
 | 001 | [Add a one-line install path that does not require a clone](plans/001-curl-installer/plan.md) | draft | — | — |
 | 002 | [Add a no-PR option to stanza release](plans/002-release-without-pr/plan.md) | done | 2026-10-09 17:46 PT | [#4](https://github.com/gitronald/stanza/pull/4) |
