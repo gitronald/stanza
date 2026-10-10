@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every installer error says whether anything was installed and is followed by
   a `hint` row with the next step.
 
+### Fixed
+
+- `stanza` commands printed their header, rows, and `done` row without color
+  even on a terminal: the color check ran inside a command substitution, where
+  stdout is a pipe. They now show the bold header, dim labels, and green
+  `done` the row grammar intended.
+
 ## [1.2.1] - 2026-10-10
 
 ### Changed

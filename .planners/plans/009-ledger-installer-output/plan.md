@@ -215,3 +215,17 @@ And for a checksum mismatch (stderr):
 - **2026-10-10T14:14:16-07:00** — PR opened: https://github.com/gitronald/stanza/pull/12
 - **2026-10-10T14:14:18-07:00** — Implemented: 6 commits ahead of `dev`.
 - **2026-10-10T14:18:10-07:00** — Reactivated: back to active after review.
+- **2026-10-10T14:20:04-07:00** — Fixed the color bug found above, on request, in this PR.
+  - `lib/stanza-common`: `print_header`, `print_row`, and `print_done`
+    now ask `should_use_color` in the calling shell, through a shared
+    `_print_label_row`. `print_hint` uses the same shape. It already worked,
+    because fd 2 is not captured. `_c` had no other caller and is removed.
+  - `tests/test-output-modes.sh`: one case stubs the gate to answer yes only
+    outside a subshell, so it runs on any platform. The other runs
+    `stanza release prerelease` under util-linux `script` and checks the
+    bold, dim, and green codes, and that `NO_COLOR` still suppresses them.
+    Against the old `stanza-common` (a scratch copy), all four color checks
+    failed. Against the fix, they pass.
+  - Left alone: `print_branch_version` in `lib/stanza-release` prints
+    ungated purple, but nothing calls it except a test that extracts it.
+  - Checks: all of `tests/` passed (output-modes 50/50, install 110/110).
