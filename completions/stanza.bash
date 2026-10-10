@@ -20,6 +20,7 @@
 
 _stanza_completion() {
     local cur prev words cword
+    local candidates=""
     _init_completion || return
 
     # Main commands
@@ -43,7 +44,7 @@ _stanza_completion() {
     case $cword in
         1)
             # Complete main commands
-            COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+            candidates="$commands"
             ;;
         2)
             # Complete based on first command
@@ -51,23 +52,23 @@ _stanza_completion() {
                 release)
                     # Complete release subcommands (bump types + phases) or options
                     if [[ $cur == -* ]]; then
-                        COMPREPLY=($(compgen -W "$release_opts" -- "$cur"))
+                        candidates="$release_opts"
                     else
-                        COMPREPLY=($(compgen -W "$release_types $release_phases" -- "$cur"))
+                        candidates="$release_types $release_phases"
                     fi
                     ;;
                 init)
                     # Complete init options
                     if [[ $cur == -* ]]; then
-                        COMPREPLY=($(compgen -W "$init_opts" -- "$cur"))
+                        candidates="$init_opts"
                     fi
                     ;;
                 rules)
                     # Complete rules actions or options
                     if [[ $cur == -* ]]; then
-                        COMPREPLY=($(compgen -W "$rules_opts" -- "$cur"))
+                        candidates="$rules_opts"
                     else
-                        COMPREPLY=($(compgen -W "$rules_actions" -- "$cur"))
+                        candidates="$rules_actions"
                     fi
                     ;;
                 guide|help|version)
@@ -84,10 +85,10 @@ _stanza_completion() {
                         return 0
                     fi
                     if [[ $cur == -* ]]; then
-                        COMPREPLY=($(compgen -W "$release_opts" -- "$cur"))
+                        candidates="$release_opts"
                     elif [[ $cword -eq 3 && ${words[2]} == "pr" ]]; then
                         # After 'release pr', complete the bump type at position 3.
-                        COMPREPLY=($(compgen -W "$release_types" -- "$cur"))
+                        candidates="$release_types"
                     fi
                     ;;
                 init)
@@ -98,7 +99,7 @@ _stanza_completion() {
                             ;;
                         *)
                             if [[ $cur == -* ]]; then
-                                COMPREPLY=($(compgen -W "$init_opts" -- "$cur"))
+                                candidates="$init_opts"
                             fi
                             ;;
                     esac
@@ -106,15 +107,19 @@ _stanza_completion() {
                 rules)
                     if [[ $cur == -* ]]; then
                         case ${words[2]} in
-                            install)   COMPREPLY=($(compgen -W "--local --force $rules_opts" -- "$cur")) ;;
-                            uninstall) COMPREPLY=($(compgen -W "--local $rules_opts" -- "$cur")) ;;
-                            *)         COMPREPLY=($(compgen -W "$rules_opts" -- "$cur")) ;;
+                            install)   candidates="--local --force $rules_opts" ;;
+                            uninstall) candidates="--local $rules_opts" ;;
+                            *)         candidates="$rules_opts" ;;
                         esac
                     fi
                     ;;
             esac
             ;;
     esac
+
+    if [[ -n "$candidates" ]]; then
+        COMPREPLY=($(compgen -W "$candidates" -- "$cur"))
+    fi
 
     return 0
 }
