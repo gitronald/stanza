@@ -6,7 +6,6 @@
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 PURPLE='\033[0;35m'
-BLUE='\033[0;34m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 DIM='\033[2m'
@@ -24,7 +23,7 @@ NC='\033[0m' # No Color
 #
 # VERBOSE (boolean) is retained as a derived flag so existing callers
 # (git_quiet, gh_quiet, scattered "if VERBOSE" checks) keep working
-# until step 2 hoists flag parsing into bin/stanza.
+# alongside global flag parsing in bin/stanza and subcommand flag parsing.
 VERBOSITY="${VERBOSITY:-1}"
 JSON_OUTPUT="${JSON_OUTPUT:-false}"
 NO_COLOR_OVERRIDE="${NO_COLOR_OVERRIDE:-false}"
@@ -168,9 +167,9 @@ json_set_or_null() {
     local key="$1"
     local value="${2:-}"
     if [[ -z "$value" ]]; then
-        JSON_BUFFER="${JSON_BUFFER},\"$(json_escape "$key")\":null"
+        json_set_raw "$key" null
     else
-        JSON_BUFFER="${JSON_BUFFER},\"$(json_escape "$key")\":\"$(json_escape "$value")\""
+        json_set "$key" "$value"
     fi
 }
 
@@ -251,7 +250,8 @@ check_required_commands() {
 # Cached project type (set on first call to detect_project_type)
 PROJECT_TYPE=""
 
-# Detect project type: uv (pyproject.toml with version), bash (VERSION file), or none
+# Detect project type: uv (pyproject.toml with version), bash (VERSION file),
+# latex (.cls/.sty with a Provides version line), or none
 detect_project_type() {
     # Return cached value if already detected
     if [[ -n "$PROJECT_TYPE" ]]; then
@@ -366,12 +366,12 @@ bump_latex_version_string() {
 
     case "$bump_type" in
         patch)
-            parts[$((n - 1))]=$((parts[n - 1] + 1))
+            parts[n - 1]=$((parts[n - 1] + 1))
             ;;
         minor)
             if [[ $n -ge 2 ]]; then
-                parts[$((n - 2))]=$((parts[n - 2] + 1))
-                parts[$((n - 1))]=0
+                parts[n - 2]=$((parts[n - 2] + 1))
+                parts[n - 1]=0
             else
                 parts[0]=$((parts[0] + 1))
             fi
@@ -610,40 +610,12 @@ get_current_version() {
 
 # ------------------------------------------------------------------------------
 
-# Check if we're in a git repository
-check_git_repo() {
-    if ! git rev-parse --git-dir > /dev/null 2>&1; then
-        print_error "Not in a git repository"
-        exit 1
-    fi
-}
-
-
 # Check if remote repository exists (returns true/false)
 has_remote() {
     local remote="${1:-origin}"
     git remote get-url "$remote" &> /dev/null
     return $?
 }
-
-# Check and warn if remote doesn't exist
-check_remote_exists() {
-    local remote="${1:-origin}"
-    local require="${2:-false}"
-
-    if ! has_remote "$remote"; then
-        if [ "$require" = "true" ]; then
-            print_error "Remote '$remote' does not exist | git remote add $remote <url>"
-            echo "| use: git remote add $remote <url>"
-            exit 1
-        else
-            print_warning "Remote '$remote' not configured - skipping remote operations"
-            return 1
-        fi
-    fi
-    return 0
-}
-
 
 # Validate that we're on a specific branch
 require_branch() {
@@ -655,17 +627,6 @@ require_branch() {
         echo "Current branch is $current_branch."
         exit 1
     fi
-}
-
-# Check if git branch exists, is active, and has no uncommitted changes
-check_git_branch_exists() {
-    local branch="$1"
-    if [ -z "$branch" ]; then
-        print_error "No branch specified"
-        exit 1
-    fi
-    check_git_repo
-    require_branch "$branch"
 }
 
 # Check for uncommitted changes
@@ -712,7 +673,7 @@ get_branch_status() {
     fi
 
     # Get ahead/behind counts
-    git rev-list --left-right --count HEAD...origin/$branch 2>/dev/null || echo "0 0"
+    git rev-list --left-right --count "HEAD...origin/$branch" 2>/dev/null || echo "0 0"
 }
 
 # Check if branch is up to date with remote
@@ -736,7 +697,7 @@ check_branch_up_to_date() {
 
     # Get ahead/behind counts
     local ahead_behind
-    ahead_behind=$(git rev-list --left-right --count HEAD...origin/$branch 2>/dev/null || echo "0 0")
+    ahead_behind=$(git rev-list --left-right --count "HEAD...origin/$branch" 2>/dev/null || echo "0 0")
     local ahead=$(echo "$ahead_behind" | awk '{print $1}')
     local behind=$(echo "$ahead_behind" | awk '{print $2}')
 
