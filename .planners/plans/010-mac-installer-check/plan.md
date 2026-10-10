@@ -5,7 +5,7 @@ status: active
 branch: feature/mac-installer-check
 created: 2026-10-10T13:59:48-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/13
 ---
 
 # Check the ledger installer output on macOS
@@ -79,3 +79,67 @@ titles first; this repo is public).
 
 - Linux and WSL checks, which 009's tests already cover.
 - Restyling other stanza commands.
+
+## Log
+
+### 2026-10-10: review of 009
+
+- Mockup comparison: the fresh-install and checksum-mismatch runs match
+  the ledger panes (bold header, dim labels, cyan `hint`, yellow `warn`,
+  red `error`, green `done`, continuation rows indented under the label).
+  See `artifacts/rendered-terminal-basic.png` and `-pro.png`.
+- Constraints: grepped `install.sh` and `uninstall.sh` for `echo -e`,
+  `tput`, cursor movement, 256-color SGRs, non-ASCII bytes, and bash 4
+  constructs (`declare -A`, `${x,,}`, `mapfile`, `|&`). None found. Color
+  is gated per fd by `use_color`, and `tilde` folds `$HOME`.
+- Drift test: changing `LABEL_WIDTH` in `uninstall.sh` fails 4 assertions;
+  changing `SGR_HINT` in `install.sh` fails 2. Both restored.
+- `tests/test-install.sh` under `/bin/bash` 3.2.57: 104 passed, 1 skip
+  (the pty color cases, which only knew util-linux `script`).
+
+### 2026-10-10: runs on a Mac
+
+macOS 26.6.2, Apple silicon, `/bin/bash` 3.2.57(1)-release, Terminal 2.15,
+`SHELL=/bin/zsh`. Each case ran with `HOME` at an empty directory, under a
+pty from BSD `script`, installing release v1.2.1 through the checkout's
+`install.sh --version=1.2.1`; raw captures are in `artifacts/macos-runs.txt`.
+
+| Case | Result |
+|---|---|
+| Terminal, Basic profile | Rendered from the capture with Terminal's default palette (no Screen Recording grant for the shell, so no real screenshot). `warn` is ANSI yellow `#999900` on white: legible, not bright yellow |
+| Terminal, Pro profile | Same rendering on black; dim labels, `done`, and `hint` readable |
+| Bright colors for bold | Header is bold with no color, and no label is bold (`SGR_WARN='0;33'`, test `warn: not bold`); nothing for the setting to change |
+| iTerm2 | Not installed on this Mac; not run |
+| Piped, `cat -v` | No `^[[` sequences; 20 rows, exit 0 |
+| `NO_COLOR=1` in a tty | No color |
+| `CLICOLOR_FORCE=1` piped | Color present |
+| `TERM=dumb` | No color, no `tput` errors on stderr |
+| `LANG=C` | Byte-identical to the default run |
+| `SHELL=/bin/zsh` | `hint    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc` |
+| `SHELL=/bin/bash` | Same hint ending in `~/.bash_profile` |
+| `~/.local/share` missing | `~/.bash_completion.d/stanza` and `~/.zsh/completions/_stanza` named before the prompt and in the rows, each followed by its `hint` (the zsh one with a continuation row) |
+| No `~/.claude` | No `rule` row; `hint    no ~/.claude, so no rule; to add it later: stanza rules install` |
+| `~/.local/share` and `~/.claude` present | Completions under `~/.local/share`, `rule    ~/.claude/rules/stanza.md`, no hints |
+| Checksum mismatch (`STANZA_REPO_URL` at a `file://` copy with a zeroed `.sha256`) | `error`, expected/actual continuation rows, and `hint` on stderr; stdout stops after `fetch`; exit 1; `HOME` still empty |
+| `uninstall.sh` | Header `stanza uninstall  (~/.local)`, a row per path before and after, `done    stanza uninstalled; 5 items removed`; a second run reports `error   no stanza installation found` on stderr, exit 1 |
+| Intel | Not available |
+
+After the clean install, the installed binary ran (`stanza 1.2.1`) and
+`_stanza` autoloaded in `zsh -f` with the hinted `fpath` line. The
+`curl | bash` line from `main` was not used: `main` still serves 009's
+predecessor until the next release, so the piped case fed the checkout's
+`install.sh` on stdin instead, which takes the same download path.
+
+The real reinstall on this machine, from the checkout with
+`--version=1.2.1`, went from stanza 1.1.0 to 1.2.1 and regenerated
+`~/.claude/rules/stanza.md`.
+
+### Decisions
+
+- `warn` stays yellow: Terminal's non-bold ANSI yellow is dark enough on
+  the Basic profile's white, so 009's trade-off holds.
+- One small fix on this branch: `tests/test-install.sh` now runs its
+  three pty color cases under BSD `script` on Darwin, so the suite passes
+  107 on macOS instead of skipping them.
+- Real Terminal screenshots need a Screen Recording grant for the shell
+  that runs `screencapture`; the renderings stand in until then.
