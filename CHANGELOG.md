@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- One-line install without a clone: `curl -fsSL
+  https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash`.
+  Run outside a checkout, `install.sh` downloads the latest release (or the
+  tag given by `--version` / `STANZA_VERSION`) and installs from it.
+- `install.sh --yes` skips the confirmation prompt. A piped install reads the
+  answer from the terminal, and fails with a hint to pass `--yes` when there
+  is none.
 - `stanza release merge` resumes a release that is already merged and tagged:
   it pushes the tag if only the local clone has it, then runs the dev cycle. A
   re-run after the cycle has finished is a no-op.

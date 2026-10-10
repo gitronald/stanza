@@ -63,15 +63,42 @@ Before installing stanza, ensure you have these dependencies:
 ## Installation
 
 ### Quick Install (User)
-Clone and install to ~/.local/bin (no sudo required):
+Install the latest release to ~/.local/bin (no sudo required):
+```bash
+curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash
+```
+
+Pin a version, or skip the confirmation prompt (required when there is no
+terminal to answer it, e.g. in a provisioning script):
+```bash
+curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=1.1.3
+curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --yes
+```
+
+To read the installer before running it, download it first:
+```bash
+curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
+Run outside a checkout, `install.sh` downloads the tagged release's source
+archive from GitHub to a temporary directory, installs from it, and removes
+it. The download is checked only by TLS; there is no separate checksum or
+signature. The script defines everything in functions and calls them on its
+last line, so a download cut off midway runs nothing. It never uses `sudo`
+itself. To upgrade, rerun the same line.
+
+When `~/.claude` exists, `install.sh` also installs the
+[Claude Code rule](#claude-code-rule); pass `--no-rules` to skip it.
+
+### From a Clone
+For development, or to install exactly the tree you have checked out:
 ```bash
 git clone https://github.com/gitronald/stanza.git
 cd stanza
 ./install.sh
 ```
-
-When `~/.claude` exists, `install.sh` also installs the
-[Claude Code rule](#claude-code-rule); pass `--no-rules` to skip it.
 
 ### System Install
 Install system-wide to /usr/local/bin:
@@ -87,10 +114,17 @@ sudo ./install.sh --system
 ```
 
 ### Uninstall
+From a clone:
 ```bash
 ./uninstall.sh
 # or for system install:
 sudo ./uninstall.sh --system
+```
+
+Without a clone, download the uninstaller and run it:
+```bash
+curl -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/uninstall.sh -o uninstall.sh
+bash uninstall.sh
 ```
 
 ## Quick Start
