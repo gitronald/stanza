@@ -105,6 +105,27 @@ piped() {
     bash -s -- "$@" < "$INSTALLER"
 }
 
+# Print a directory of links to every tool on PATH except $1, for use as PATH
+path_without() {
+    local missing="$1" dir="$CASE_TMP/no-$1" tool name
+    mkdir -p "$dir"
+    while IFS= read -r -d '' tool; do
+        name=$(basename "$tool")
+        [[ "$name" == "$missing" || -e "$dir/$name" ]] || ln -s "$tool" "$dir/$name"
+    done < <(IFS=:; for d in $PATH; do [[ -d "$d" ]] && find "$d" -maxdepth 1 \( -type f -o -type l \) -perm -u+x -print0 2>/dev/null; done)
+    echo "$dir"
+}
+
+# Run the first $1 bytes of the installer piped; succeed when main ran. main
+# prints its banner first, so a cut that ran it shows up even when it then
+# stopped short of installing (e.g. arguments lost, no --yes)
+cut_runs_main() {
+    local out
+    setup
+    out=$(head -c "$1" "$INSTALLER" | bash -s -- --yes 2>&1) || true
+    [[ -e "$HOME/.local" || "$out" == *"Stanza CLI Tool Installer"* ]]
+}
+
 SUITE_TMP=$(mktemp -d)
 trap 'rm -rf "$SUITE_TMP"' EXIT
 # Includes a prerelease and a two-digit minor, to check "latest" picks the
@@ -160,12 +181,12 @@ assert_eq "--version downloads even from a checkout" "1.0.0" "$(installed_versio
 
 echo "Piped from inside a checkout"
 setup
-out=$(cd "$STANZA_DIR" && piped --yes 2>&1)
+(cd "$STANZA_DIR" && piped --yes > /dev/null 2>&1)
 assert_eq "ignores the current directory" "1.10.0" "$(installed_version)"
 setup
 mkdir -p "$CASE_TMP/cwd" && cp -r "$STANZA_DIR/bin" "$STANZA_DIR/lib" "$CASE_TMP/cwd/"
 cp "$STANZA_DIR/bin/stanza" "$CASE_TMP/cwd/bash"
-out=$(cd "$CASE_TMP/cwd" && piped --yes 2>&1)
+(cd "$CASE_TMP/cwd" && piped --yes > /dev/null 2>&1)
 assert_eq "ignores a file named bash in the current directory" "1.10.0" "$(installed_version)"
 
 echo "Missing tag"
@@ -218,18 +239,21 @@ assert_eq "nothing installed" "none" "$(installed_version)"
 echo "shasum when sha256sum is absent"
 if command -v shasum > /dev/null; then
     setup
-    nosum="$CASE_TMP/nosum"
-    mkdir -p "$nosum"
-    # A PATH of links to every tool on PATH except sha256sum
-    while IFS= read -r -d '' tool; do
-        name=$(basename "$tool")
-        [[ "$name" == sha256sum || -e "$nosum/$name" ]] || ln -s "$tool" "$nosum/$name"
-    done < <(IFS=:; for d in $PATH; do [[ -d "$d" ]] && find "$d" -maxdepth 1 \( -type f -o -type l \) -perm -u+x -print0 2>/dev/null; done)
+    nosum=$(path_without sha256sum)
     PATH="$nosum" bash -s -- --yes --version 1.9.0 < "$INSTALLER" > /dev/null 2>&1 || true
     assert_eq "installs with shasum" "1.9.0" "$(installed_version)"
 else
     echo "  SKIP: shasum not available"
 fi
+
+echo "Piped without git"
+setup
+nogit=$(path_without git)
+status=0
+out=$(PATH="$nogit" bash -s -- --yes < "$INSTALLER" 2>&1) || status=$?
+assert_eq "exits non-zero" "1" "$status"
+assert_contains "names git as missing" "$out" "Missing required dependencies: git"
+assert_not_contains "does not blame the connection" "$out" "Could not find the latest release"
 
 echo "Invalid version"
 setup
@@ -282,24 +306,14 @@ size=$(wc -c < "$INSTALLER")
 # Every cut short of the final line leaves main uncalled
 last_line=$(tail -1 "$INSTALLER" | wc -c)
 ran=0
-for ((n = 1; n < size - last_line; n += 97)); do
-    setup
-    out=$(head -c "$n" "$INSTALLER" | bash -s -- --yes 2>&1) || true
-    # main prints its banner first, so a cut that ran it shows up even when
-    # it then stopped short of installing (e.g. arguments lost, no --yes)
-    if [[ -e "$HOME/.local" || "$out" == *"Stanza CLI Tool Installer"* ]]; then
-        ran=$((ran + 1))
-        echo "    main ran after a cut at byte $n"
-    fi
-done
-# Every cut within the final line, up to but not including its last
-# character, must not run main either (a bare `main` would run it argless)
-for ((n = size - last_line; n < size - 1; n++)); do
-    setup
-    out=$(head -c "$n" "$INSTALLER" | bash -s -- --yes 2>&1) || true
-    # main prints its banner first, so a cut that ran it shows up even when
-    # it then stopped short of installing (e.g. arguments lost, no --yes)
-    if [[ -e "$HOME/.local" || "$out" == *"Stanza CLI Tool Installer"* ]]; then
+# Every 97th cut before the final line, then every cut within the final
+# line up to but not including its last character (a bare `main` would run
+# it argless)
+cuts=()
+for ((n = 1; n < size - last_line; n += 97)); do cuts+=("$n"); done
+for ((n = size - last_line; n < size - 1; n++)); do cuts+=("$n"); done
+for n in "${cuts[@]}"; do
+    if cut_runs_main "$n"; then
         ran=$((ran + 1))
         echo "    main ran after a cut at byte $n"
     fi
