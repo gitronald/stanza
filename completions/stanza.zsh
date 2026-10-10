@@ -27,6 +27,13 @@ _stanza() {
     typeset -A opt_args
 
     _arguments -C \
+        '(-q --quiet)'{-q,--quiet}'[Reduce output to one-line outcomes]' \
+        '(-v --verbose)'{-v,--verbose}'[Show step internals]' \
+        '-vv[Dump git/gh commands]' \
+        '--json[Emit a single JSON document on stdout]' \
+        '--no-color[Disable ANSI color]' \
+        '(-V --version)'{-V,--version}'[Show stanza version]' \
+        '(-h --help)'{-h,--help}'[Show help message]' \
         '1: :_stanza_commands' \
         '*::arg:->args'
 
@@ -49,7 +56,12 @@ _stanza() {
                     # No arguments for help
                     ;;
                 version)
-                    # No arguments for version
+                    _arguments \
+                        '(-q --quiet)'{-q,--quiet}'[Reduce output]' \
+                        '(-v --verbose)'{-v,--verbose}'[Show step internals]' \
+                        '--json[Emit a single JSON document on stdout]' \
+                        '--no-color[Disable ANSI color]' \
+                        '(-h --help)'{-h,--help}'[Show help message]'
                     ;;
             esac
             ;;
@@ -155,6 +167,12 @@ _stanza_rules() {
 
 _stanza_init() {
     _arguments \
+        '(-q --quiet)'{-q,--quiet}'[Reduce output to one-line outcomes]' \
+        '(-v --verbose)'{-v,--verbose}'[Show step internals]' \
+        '-vv[Dump git/gh commands]' \
+        '--json[Emit a single JSON document on stdout]' \
+        '--no-color[Disable ANSI color]' \
+        '(-t --type)'{-t,--type}'[Scaffold a missing version file]:type:(bash uv)' \
         '(-n --name)'{-n,--name}'[Repository name]:name:' \
         '(-d --description)'{-d,--description}'[Repository description]:description:' \
         '--public[Create a public repository (default: private)]' \

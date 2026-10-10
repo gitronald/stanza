@@ -151,6 +151,7 @@ case "$cmd" in
         echo 1 > "$STATE/number"
         printf '%s' "$title" > "$STATE/title"
         echo open > "$STATE/state"
+        echo main > "$STATE/base"
         echo "https://example.test/pull/1" > "$STATE/url"
         printf 'filled body' > "$STATE/body"
         git rev-parse dev > "$STATE/head"
@@ -179,6 +180,10 @@ case "$cmd" in
           body) cat "$STATE/body" ;;
           title) cat "$STATE/title" ;;
           headRefOid) cat "$STATE/head" ;;
+          headRefOid,baseRefName,state)
+            [[ ! -f "$STATE/view_fail" ]] || exit 1
+            printf '%s|%s|%s\n' "$(cat "$STATE/head")" "$(cat "$STATE/base")" "$(tr '[:lower:]' '[:upper:]' < "$STATE/state")"
+            ;;
           *) printf '' ;;
         esac
         ;;
@@ -193,14 +198,18 @@ case "$cmd" in
         ;;
       merge)
         # Like GitHub's --merge: always a merge commit, honoring --subject.
-        subject=""
+        subject=""; match_head=""
         while [[ $# -gt 0 ]]; do
           case "$1" in
             --subject) subject="$2"; shift 2 ;;
+            --match-head-commit) match_head="$2"; shift 2 ;;
             --body) shift 2 ;;
             *) shift ;;
           esac
         done
+        [[ ! -f "$STATE/race" ]] || echo changed > "$STATE/head"
+        [[ -z "$match_head" || "$match_head" == "$(cat "$STATE/head")" ]] || exit 1
+        printf '%s' "$match_head" > "$STATE/match_head"
         printf '%s' "$subject" > "$STATE/merge_subject"
         git checkout -q main
         if [[ -n "$subject" ]]; then
@@ -793,6 +802,103 @@ test_no_pr_ignored_flags_warn() {
 }
 
 # --- Run -------------------------------------------------------------------
+
+test_merge_requires_dev() {
+    setup_remote_repo
+    "$STANZA" release pr patch -y --local >/dev/null 2>&1
+    git checkout -q -b feature
+    local out code=0
+    out=$("$STANZA" release merge --local -y 2>&1) || code=$?
+    assert_eq "local merge rejects feature branch" "1" "$code"
+    assert_contains "local merge explains required branch" "$out" "dev"
+    assert_eq "wrong-branch merge creates no tag" "" "$(git tag)"
+    teardown_remote_repo
+}
+
+test_merge_requires_dev
+
+test_pr_merge_guards() {
+    local scenario out code before
+    for scenario in view_fail empty_head closed wrong_base mismatch race; do
+        setup_remote_repo
+        "$STANZA" release pr patch -y >/dev/null 2>&1
+        before=$(git rev-parse main)
+        case "$scenario" in
+            view_fail) touch "$GH_MOCK_STATE/view_fail" ;;
+            empty_head) : > "$GH_MOCK_STATE/head" ;;
+            closed) echo closed > "$GH_MOCK_STATE/state" ;;
+            wrong_base) echo other > "$GH_MOCK_STATE/base" ;;
+            mismatch) echo other > "$GH_MOCK_STATE/head" ;;
+            race) touch "$GH_MOCK_STATE/race" ;;
+        esac
+        code=0
+        out=$("$STANZA" release merge 1 -y 2>&1) || code=$?
+        assert_eq "$scenario refuses PR merge" "1" "$code"
+        assert_eq "$scenario leaves main unchanged" "$before" "$(git rev-parse main)"
+        assert_eq "$scenario creates no tag" "" "$(git tag)"
+        if [[ "$scenario" == view_fail || "$scenario" == empty_head ]]; then
+            assert_contains "$scenario explains lookup failure" "$out" "Could not verify"
+        fi
+        teardown_remote_repo
+    done
+    setup_remote_repo
+    "$STANZA" release pr patch -y >/dev/null 2>&1
+    source_release
+    git branch -m dev feature
+    code=0
+    out=$(gh_merge_pr v0.1.0 1 2>&1) || code=$?
+    assert_eq "missing dev head refuses PR merge" "1" "$code"
+    assert_contains "missing dev head explains failure" "$out" "Could not verify"
+    teardown_remote_repo
+}
+
+test_pr_merge_guards
+
+test_merge_validates_release_title() {
+    local title code out before
+    for title in v9.9.9 'Release v0.1.0' ''; do
+        setup_remote_repo
+        "$STANZA" release pr patch -y >/dev/null 2>&1
+        printf '%s' "$title" > "$GH_MOCK_STATE/title"
+        before=$(git rev-parse main)
+        code=0
+        out=$("$STANZA" release merge -y 2>&1) || code=$?
+        assert_eq "title '$title' rejected" "1" "$code"
+        assert_contains "title mismatch hint" "$out" "PR title must be the release tag"
+        assert_eq "title mismatch leaves main unchanged" "$before" "$(git rev-parse main)"
+        assert_eq "title mismatch creates no tag" "" "$(git tag)"
+        teardown_remote_repo
+    done
+    setup_remote_repo
+    echo invalid > VERSION
+    git add VERSION
+    git commit -q -m invalid
+    code=0
+    out=$("$STANZA" release merge --local -y 2>&1) || code=$?
+    assert_eq "invalid release version rejected" "1" "$code"
+    assert_eq "invalid release version creates no tag" "" "$(git tag)"
+    teardown_remote_repo
+}
+
+test_merge_validates_release_title
+
+test_local_release_without_gh() {
+    setup_remote_repo
+    local bindir="$TEST_TMPDIR/local-bin" cmd code=0 out
+    mkdir -p "$bindir"
+    # An allowlist ensures no system or mocked gh can be found through PATH.
+    for cmd in bash git dirname head tr sed grep date awk mv cat wc; do
+        ln -s "$(command -v "$cmd")" "$bindir/$cmd"
+    done
+    out=$(PATH="$bindir" bash -c 'command -v gh' || true)
+    assert_eq "local fixture has no gh on PATH" "" "$out"
+    out=$(PATH="$bindir" "$STANZA" release patch --local -y 2>&1) || code=$?
+    assert_eq "local release without gh succeeds" "0" "$code"
+    assert_eq "local release without gh tags version" "v0.1.0" "$(git tag)"
+    assert_eq "local release without gh completes dev cycle" "0.1.1a0" "$(cat VERSION)"
+    teardown_remote_repo
+}
+test_local_release_without_gh
 
 trap cleanup EXIT
 

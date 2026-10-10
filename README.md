@@ -55,7 +55,7 @@ Before installing stanza, ensure you have these dependencies:
 
 - **git** - Version control ([install](https://git-scm.com/downloads))
 - **uv** - Python package and project manager, required for Python projects ([install](https://docs.astral.sh/uv/getting-started/installation/))
-- **gh** - GitHub CLI ([install](https://github.com/cli/cli#installation))
+- **gh** - GitHub CLI, required for `init` and PR releases; `--local`, `--no-pr`, and prerelease runs work without it ([install](https://github.com/cli/cli#installation))
 - **bash** - Required for script execution (pre-installed on macOS and most Unix systems)
 
 **Note for macOS users**: All scripts use `#!/usr/bin/env bash` to ensure bash execution regardless of your default shell (e.g., zsh). No additional configuration should be needed.
@@ -245,8 +245,10 @@ gh pr view                      # review the PR (diff, body, checks)
 stanza release merge -y         # merge the PR, tag, open the next prerelease cycle
 ```
 
-- Phase 2 re-derives everything from the open PR (the PR number and the tag from
-  its title), so there is no state file between phases.
+- Phase 2 re-derives everything it needs (the open PR, and the tag from the
+  version on `dev`), so there is no state file between phases. It runs on `dev`
+  and refuses a PR that is not open, does not target the base branch, or whose
+  title is not the release tag.
 - If more than one open `dev -> base` PR exists, pin the target with
   `stanza release merge <pr-number>`.
 - `merge` refuses to proceed if `dev` has advanced past the reviewed PR head, so
@@ -418,7 +420,7 @@ Shared functions used by all subcommands:
 
 **Validation:**
 - `check_command_availability()` - Check if command exists
-- `check_required_commands()` - Check git, gh, and uv (if uv project)
+- `check_required_commands([--without-gh])` - Check git, gh (unless `--without-gh`), and uv (if uv project)
 - `should_skip_remote()` - Check if remote operations should be skipped
 
 ### Release Functions (lib/stanza-release)

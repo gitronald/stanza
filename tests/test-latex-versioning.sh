@@ -164,7 +164,7 @@ git commit -q -m "add mypkg.cls"
 git checkout -q -b dev
 
 out=$(NO_COLOR=1 "$STANZA" --json release patch -y --local 2>&1)
-if echo "$out" | python3 -c "
+if echo "$out" | uv run --no-project python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 assert d['project_type'] == 'latex', f'project_type={d.get(\"project_type\")}'
@@ -198,5 +198,21 @@ fi
 cleanup
 
 echo ""
+echo "LaTeX version token ends before closing bracket or whitespace"
+for suffix in ']' $'\tdescription]' ' description]'; do
+    fresh_dir
+    printf '\\ProvidesClass{demo}[2026/01/01 v1.2%s\n' "$suffix" > demo.cls
+    assert_eq "read version before suffix '$suffix'" "$(get_version_from_latex)" "1.2"
+    set_version_in_latex 1.3
+    assert_eq "write preserves suffix '$suffix'" "$(cat demo.cls)" "\ProvidesClass{demo}[$(date +%Y/%m/%d) v1.3$suffix"
+    cleanup
+done
+
+echo "LaTeX leading-zero components use decimal arithmetic"
+assert_eq "decimal patch" "$(bump_latex_version_string 1.09 patch)" "1.10"
+assert_eq "decimal minor" "$(bump_latex_version_string 1.09.3 minor)" "1.10.0"
+assert_eq "decimal major" "$(bump_latex_version_string 09.2 major)" "10.0"
+assert_eq "decimal single-component minor" "$(bump_latex_version_string 09 minor)" "10"
+
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]] || exit 1

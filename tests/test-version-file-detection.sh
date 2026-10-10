@@ -597,5 +597,48 @@ test_changelog_promote_heading_only
 test_changelog_promote_empty_noop
 
 echo ""
+test_leading_zero_versions() {
+    source_common_fresh
+    local ver code out
+    for ver in 01.2.3 1.02.3 1.2.08 1.2.3a09; do
+        code=0
+        out=$(validate_version_string "$ver" 2>&1) || code=$?
+        assert_eq "rejects leading zeros in $ver" "1" "$code"
+        assert_contains "explains leading zeros in $ver" "leading zeros" "$out"
+    done
+    code=0
+    (validate_version_string 0.0.0a0) || code=$?
+    assert_eq "zero components remain valid" "0" "$code"
+}
+test_leading_zero_versions
+
+test_readme_token_boundaries() {
+    setup_git_repo
+    source_common
+    local suffix code original
+    for suffix in beta .4 -rc1 a1beta; do
+        original="# demo v1.2.3$suffix"
+        printf '%s\n' "$original" > README.md
+        code=0
+        get_version_from_readme >/dev/null || code=$?
+        assert_eq "reader rejects partial token $suffix" "1" "$code"
+        code=0
+        set_version_in_readme 1.2.4 || code=$?
+        assert_eq "writer rejects partial token $suffix" "1" "$code"
+        assert_eq "partial token $suffix unchanged" "$original" "$(cat README.md)"
+    done
+    for suffix in '' ' text' ')' ',' '!' '.' '. text'; do
+        printf '# demo v1.2.3%s\n' "$suffix" > README.md
+        assert_eq "reader accepts boundary '$suffix'" "1.2.3" "$(get_version_from_readme)"
+        set_version_in_readme 1.2.4
+        assert_eq "writer preserves boundary '$suffix'" "# demo v1.2.4$suffix" "$(cat README.md)"
+    done
+    printf '# demo v1.2.3beta v2.3.4!\n' > README.md
+    set_version_in_readme 2.3.5
+    assert_eq "writer skips partial token before valid token" "# demo v1.2.3beta v2.3.5!" "$(cat README.md)"
+    cleanup
+}
+test_readme_token_boundaries
+
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]] || exit 1

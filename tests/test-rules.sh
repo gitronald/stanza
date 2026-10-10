@@ -406,5 +406,24 @@ test_uninstall_script
 test_install_script_prefix
 
 echo ""
+test_completion_global_and_init_flags() {
+    local out flag zsh_top zsh_init
+    out=$(complete_line stanza -)
+    zsh_top=$(sed -n '/^_stanza() {/,/^}/p' "$STANZA_DIR/completions/stanza.zsh")
+    for flag in --json --quiet -q --verbose -v -vv --no-color --version -V --help -h; do
+        assert_contains "bash global offers $flag" "$out" "$flag"
+        assert_contains "zsh global offers $flag" "$zsh_top" "$flag"
+    done
+    out=$(complete_line stanza --json init -)
+    zsh_init=$(sed -n '/^_stanza_init() {/,/^}/p' "$STANZA_DIR/completions/stanza.zsh")
+    for flag in --type -t --json --quiet -q --verbose -v -vv --no-color; do
+        assert_contains "bash init after global offers $flag" "$out" "$flag"
+        assert_contains "zsh init offers $flag" "$zsh_init" "$flag"
+    done
+    assert_eq "bash init type values" "bash uv" "$(complete_line stanza init --type '')"
+    assert_contains "bash release after globals" "$(complete_line stanza --json -vv release pr '')" "patch"
+}
+test_completion_global_and_init_flags
+
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]] || exit 1
