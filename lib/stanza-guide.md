@@ -114,6 +114,8 @@ failure:
 
 Git calls that reach the remote give up after `STANZA_NET_STALL_SECONDS`
 (default 30) below 1000 bytes/s, instead of waiting on a stalled connection.
+A remote that sends nothing while it works counts as stalled too (git's
+keepalives are far below the limit), so raise it for a slow server-side hook.
 Set it to `0` to turn this off. Your own `http.lowSpeedLimit`/`http.lowSpeedTime`
 git config wins. For SSH remotes, stanza adds `ServerAlive` keepalives unless
 you set `core.sshCommand`, `GIT_SSH`, or `GIT_SSH_COMMAND` yourself.

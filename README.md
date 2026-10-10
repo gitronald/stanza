@@ -176,9 +176,9 @@ When a release stops partway, it prints the error git or gh gave, a row naming t
   hint      resume: git checkout dev && stanza release merge -y
 ```
 
-`stanza release merge` resumes a release that is already merged and tagged, and is a no-op once the dev cycle is done. With `--json`, a failed run emits `"ok": false` with `failed_step`, `completed_steps`, `error`, and `resume`. `stanza guide` documents the fields.
+`stanza release merge` resumes a release that is already merged and tagged, and is a no-op once the dev cycle is done. With `--json`, a failed run emits `"ok": false` with `failed_step`, `completed_steps`, `error`, `resume`, and `hint` (which holds the recovery text when `resume` is `null`). `stanza guide` documents the fields.
 
-Git calls that reach the remote give up when a transfer stays below 1000 bytes/s for `STANZA_NET_STALL_SECONDS` (default 30). Set it to `0` to turn this off. Your own `http.lowSpeed*` git config wins.
+Git calls that reach the remote give up when a transfer stays below 1000 bytes/s for `STANZA_NET_STALL_SECONDS` (default 30). Raise it for a remote that can stay silent longer while it works (a slow server-side hook); set it to `0` to turn this off. Your own `http.lowSpeed*` git config wins.
 
 ### Release Command
 
