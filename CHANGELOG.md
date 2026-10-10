@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-10
+
+### Added
+
+- One-line install without a clone: `curl --proto '=https' --tlsv1.2 -fsSL
+  https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash`.
+  Run outside a checkout, `install.sh` downloads the latest release (or the
+  tag given by `--version` / `STANZA_VERSION`) and installs from it.
+- Each stable release publishes `stanza-<version>.tar.gz` and its `.sha256` on
+  its GitHub release, built by `scripts/release-asset.sh` from a tag-triggered
+  workflow. The one-line installer downloads that asset and refuses to install
+  it unless it matches the checksum; tags without an asset (v1.1.3 and
+  earlier) are refused, with a pointer to the clone path.
+- `install.sh --yes` skips the confirmation prompt. A piped install reads the
+  answer from the terminal, and fails with a hint to pass `--yes` when there
+  is none.
+- `stanza release merge` resumes a release that is already merged and tagged:
+  it pushes the tag if only the local clone has it, then runs the dev cycle. A
+  re-run after the cycle has finished is a no-op.
+- `STANZA_NET_STALL_SECONDS` (default 30) sets how long a git transfer may stay
+  below 1000 bytes/s before it is abandoned; `0` turns the limit off.
+
+### Changed
+
+- A release that stops partway prints a row naming the failed step (`bump`,
+  `push`, `pr`, `merge`, `tag`, `cycle`), what it left behind, and the command
+  that resumes it.
+- With `--json`, a failed release prints a JSON document with `"ok": false`,
+  `failed_step`, `completed_steps`, `error`, `resume`, and `hint`. Successful
+  release documents carry `"ok": true`, and `merge` adds `resumed`.
+- The dev cycle skips the prerelease bump when `dev` is already past the
+  release, and skips the push when `origin/dev` already matches.
+- For SSH remotes, git calls add `ServerAlive` keepalives unless an ssh command
+  is already configured.
+
+### Fixed
+
+- A stalled HTTPS fetch or push could hang a release indefinitely. Git calls
+  that reach the remote now give up after `STANZA_NET_STALL_SECONDS` without
+  progress, unless the user's own `http.lowSpeed*` config says otherwise.
+- A failed git or gh call ended the run with no message, because its output
+  was discarded. The error it printed is now shown, with the command that
+  failed.
+- Error details from the branch, clean-tree, and gh login checks went to
+  stdout, ahead of any `--json` document; they now go to stderr.
+
 ## [1.1.3] - 2026-10-09
 
 ### Added
