@@ -1,7 +1,7 @@
 ---
 id: 1
 slug: curl-installer
-status: active
+status: implemented
 branch: feature/curl-installer
 created: 2026-10-08T17:47:56-07:00
 concluded:
@@ -224,6 +224,7 @@ Plan 008, written as the follow-up, is retired into this plan.
   so `stanza release` is unchanged and needs no opt-in; old tags are refused;
   no signing. Detail in [subplan b](subplans/b-verified-release-download.md)'s
   Log.
+- **2026-10-10T12:55:42-07:00** — Implemented: 20 commits ahead of `dev`.
 
 ## Handoff
 
