@@ -1,11 +1,11 @@
 ---
 id: 8
 slug: verified-release-download
-status: draft
-branch:
+status: retired
+branch: null
 created: 2026-10-10T12:38:44-07:00
-concluded:
-pr:
+concluded: 2026-10-10T12:43:16-07:00
+pr: null
 ---
 
 # Verify the installer's download with a checksummed release asset
@@ -83,3 +83,7 @@ fixed.
 - Package managers (plan 001's option D). They need a stable asset, which
   this plan provides, but each is its own plan.
 - Changing the install line or the install layout.
+
+## Log
+
+- **2026-10-10T12:43:17-07:00** — Retired. The work moved to plan 001. Release-asset checksums are now required before the one-line installer ships, so this work is subplan b of plan 001.
