@@ -36,7 +36,7 @@ who wants to read what they are about to run.
 | Subplan | Scope | Status | Note |
 |---|---|---|---|
 | [a](subplans/a-fetch-mode.md) | Install from the tag archive when piped | done |  |
-| [b](subplans/b-verified-release-download.md) | Verify the installer's download with a checksummed release asset | draft |  |
+| [b](subplans/b-verified-release-download.md) | Verify the installer's download with a checksummed release asset | active |  |
 <!-- planners:subplans:end -->
 
 ### Options
