@@ -141,9 +141,9 @@ uname_stub() {
     echo "$dir"
 }
 
-# Succeed when $1 holds an ESC byte
-has_esc() {
-    [[ "$1" == *$'\033'* ]]
+# "yes" when $1 holds an ESC byte, otherwise "no"
+esc_state() {
+    if [[ "$1" == *$'\033'* ]]; then echo yes; else echo no; fi
 }
 
 SUITE_TMP=$(mktemp -d)
@@ -421,23 +421,18 @@ assert_contains "on PATH: run it now" "$out" "done    stanza $SELF_VERSION. Run:
 echo "Color"
 setup
 out=$(env -u NO_COLOR TERM=xterm "$INSTALLER" --yes 2>&1)
-if has_esc "$out"; then r=yes; else r=no; fi
-assert_eq "piped: no ESC byte" "no" "$r"
+assert_eq "piped: no ESC byte" "no" "$(esc_state "$out")"
 setup
 out=$(env -u NO_COLOR TERM=xterm CLICOLOR_FORCE=1 "$INSTALLER" --yes 2>&1)
-if has_esc "$out"; then r=yes; else r=no; fi
-assert_eq "CLICOLOR_FORCE=1 piped: colored" "yes" "$r"
+assert_eq "CLICOLOR_FORCE=1 piped: colored" "yes" "$(esc_state "$out")"
 setup
 out=$(TERM=xterm CLICOLOR_FORCE=1 "$INSTALLER" --yes 2>&1)
-if has_esc "$out"; then r=yes; else r=no; fi
-assert_eq "NO_COLOR beats CLICOLOR_FORCE" "no" "$r"
+assert_eq "NO_COLOR beats CLICOLOR_FORCE" "no" "$(esc_state "$out")"
 setup
 out=$(env -u NO_COLOR TERM=xterm CLICOLOR_FORCE=1 "$INSTALLER" --yes --no-color 2>&1)
-if has_esc "$out"; then r=yes; else r=no; fi
-assert_eq "--no-color beats CLICOLOR_FORCE" "no" "$r"
+assert_eq "--no-color beats CLICOLOR_FORCE" "no" "$(esc_state "$out")"
 out=$(env -u NO_COLOR TERM=xterm CLICOLOR_FORCE=1 "$INSTALLER" --bogus --no-color 2>&1) || true
-if has_esc "$out"; then r=yes; else r=no; fi
-assert_eq "--no-color covers an earlier argument error" "no" "$r"
+assert_eq "--no-color covers an earlier argument error" "no" "$(esc_state "$out")"
 
 # The gate itself, for each fd state the suite cannot set up portably
 eval "$(helpers_of "$INSTALLER")"
@@ -453,16 +448,13 @@ if script --version 2> /dev/null | grep -q util-linux; then
     in_pty() { script -qec "$1" /dev/null 2>&1; }
     setup
     out=$(in_pty "env -u NO_COLOR TERM=xterm '$INSTALLER' --yes")
-    if has_esc "$out"; then r=yes; else r=no; fi
-    assert_eq "terminal: colored" "yes" "$r"
+    assert_eq "terminal: colored" "yes" "$(esc_state "$out")"
     setup
     out=$(in_pty "env NO_COLOR=1 TERM=xterm '$INSTALLER' --yes")
-    if has_esc "$out"; then r=yes; else r=no; fi
-    assert_eq "terminal, NO_COLOR=1: no ESC byte" "no" "$r"
+    assert_eq "terminal, NO_COLOR=1: no ESC byte" "no" "$(esc_state "$out")"
     setup
     out=$(in_pty "env -u NO_COLOR TERM=dumb '$INSTALLER' --yes")
-    if has_esc "$out"; then r=yes; else r=no; fi
-    assert_eq "terminal, TERM=dumb: no ESC byte" "no" "$r"
+    assert_eq "terminal, TERM=dumb: no ESC byte" "no" "$(esc_state "$out")"
 else
     echo "  SKIP: util-linux script not available"
 fi
@@ -499,8 +491,7 @@ out=$(env -u NO_COLOR TERM=xterm "$STANZA_DIR/uninstall.sh" -y 2>&1)
 assert_contains "header names the prefix" "$out" "stanza uninstall  (~/.local)"
 assert_contains "row per removed path" "$out" "  zsh     ~/.zsh/completions/_stanza"
 assert_contains "closing row" "$out" "done    stanza uninstalled; 5 items removed"
-if has_esc "$out"; then r=yes; else r=no; fi
-assert_eq "piped: no ESC byte" "no" "$r"
+assert_eq "piped: no ESC byte" "no" "$(esc_state "$out")"
 assert_eq "binary removed" "no" "$([[ -e "$HOME/.local/bin/stanza" ]] && echo yes || echo no)"
 status=0
 out=$("$STANZA_DIR/uninstall.sh" -y 2>&1) || status=$?
