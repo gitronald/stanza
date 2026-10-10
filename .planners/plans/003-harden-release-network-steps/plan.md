@@ -1,8 +1,8 @@
 ---
 id: 3
 slug: harden-release-network-steps
-status: draft
-branch:
+status: active
+branch: feature/harden-release-network-steps
 created: 2026-10-09T17:17:19-07:00
 concluded:
 pr:
@@ -88,3 +88,11 @@ recovery a single command. Item 5 is for callers.
   and the person running the release decides whether to re-run.
 - Wrapping `gh` calls in a timeout. `gh` has its own HTTP client, and none
   stalled here; revisit only if one does.
+
+## Log
+
+- **2026-10-09T21:37:20-07:00** — Activated.
+  - Branch: `feature/harden-release-network-steps`
+  - Base: `dev` at `9458d33`
+  - Worktree: `.worktrees/harden-release-network-steps`
+  - PR: pending
