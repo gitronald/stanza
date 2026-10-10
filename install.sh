@@ -52,13 +52,13 @@ show_help() {
 Usage: ./install.sh [OPTIONS]
 
 Install stanza CLI tool. Run from a checkout, it installs that checkout's
-files. Run any other way (e.g. piped from curl), it downloads a tagged
-release from GitHub first.
+files. Run any other way (e.g. piped from curl), it downloads a release's
+asset from GitHub first and checks it against the release's SHA-256.
 
 Options:
   --prefix=PATH         Install to custom location (default: ~/.local)
   --system              Install system-wide to /usr/local (requires sudo)
-  --version=TAG         Download and install this tag (e.g. 1.1.3 or v1.1.3)
+  --version=TAG         Download and install this tag (X.Y.Z or vX.Y.Z)
                         instead of the checkout or the latest release
                         (also read from STANZA_VERSION)
   -y, --yes             Skip the confirmation prompt
@@ -71,7 +71,7 @@ Examples:
   sudo ./install.sh --system      # System install to /usr/local
   ./install.sh --prefix=~/tools   # Custom location
   curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash
-  curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=1.1.3
+  curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/gitronald/stanza/main/install.sh | bash -s -- --version=X.Y.Z
 EOF
 }
 
@@ -94,14 +94,14 @@ parse_args() {
                 REQUESTED_VERSION="${1#*=}"
                 # Empty would read as "no version" and silently install latest
                 if [[ -z "$REQUESTED_VERSION" ]]; then
-                    error "--version requires a tag (e.g. --version=1.1.3)"
+                    error "--version requires a tag (e.g. --version=X.Y.Z)"
                     exit 1
                 fi
                 shift
                 ;;
             --version)
                 if [[ $# -lt 2 || -z "$2" ]]; then
-                    error "--version requires a tag (e.g. --version 1.1.3)"
+                    error "--version requires a tag (e.g. --version X.Y.Z)"
                     exit 1
                 fi
                 REQUESTED_VERSION="$2"
@@ -152,10 +152,13 @@ check_dependencies() {
         missing_deps+=("gh")
     fi
 
-    # Downloading a release needs a fetcher and tar
+    # Downloading a release needs a fetcher, a SHA-256 tool, and tar
     if [[ -z "$SOURCE_DIR" ]]; then
         if ! command -v curl &> /dev/null && ! command -v wget &> /dev/null; then
             missing_deps+=("curl")
+        fi
+        if ! command -v sha256sum &> /dev/null && ! command -v shasum &> /dev/null; then
+            missing_deps+=("sha256sum")
         fi
         if ! command -v tar &> /dev/null; then
             missing_deps+=("tar")
@@ -179,6 +182,9 @@ check_dependencies() {
                     ;;
                 curl)
                     echo "  - curl or wget, to download the release"
+                    ;;
+                sha256sum)
+                    echo "  - sha256sum (coreutils) or shasum, to verify the release"
                     ;;
                 tar)
                     echo "  - tar, to unpack the release"
@@ -241,39 +247,77 @@ cleanup_fetch() {
     fi
 }
 
-# Download the archive of tag v$FETCH_VERSION, unpack it to a temp
-# directory, and point SOURCE_DIR at the unpacked tree.
+# Download $1 to the file $2
+download() {
+    if command -v curl &> /dev/null; then
+        # Refuse a redirect off HTTPS (GitHub serves assets via a redirect)
+        curl -fsSL --proto-redir '=https' --retry 2 -o "$2" "$1"
+    else
+        wget -q -O "$2" "$1"
+    fi
+}
+
+# SHA-256 of the file $1, as lowercase hex
+sha256_of() {
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+# Download release v$FETCH_VERSION's asset and its checksum, refuse to go on
+# unless they match, unpack the asset to a temp directory, and point
+# SOURCE_DIR at the unpacked tree. The asset and checksum are published by
+# scripts/release-asset.sh; tags from before it have neither and are refused.
 fetch_release() {
     [[ -z "$SOURCE_DIR" ]] || return 0
 
-    local url="$REPO_URL/archive/refs/tags/v$FETCH_VERSION.tar.gz"
-    local archive root
+    local name="stanza-$FETCH_VERSION.tar.gz"
+    local base="$REPO_URL/releases/download/v$FETCH_VERSION"
+    local archive expected actual root
 
     FETCH_DIR="$(mktemp -d)"
     trap cleanup_fetch EXIT
-    archive="$FETCH_DIR/stanza.tar.gz"
+    archive="$FETCH_DIR/$name"
 
     info "Downloading stanza v$FETCH_VERSION..."
-    if command -v curl &> /dev/null; then
-        # Refuse a redirect off HTTPS (GitHub serves archives via a redirect)
-        curl -fsSL --proto-redir '=https' --retry 2 -o "$archive" "$url" || {
-            error "Download failed: $url"
-            exit 1
-        }
-    else
-        wget -q -O "$archive" "$url" || {
-            error "Download failed: $url"
-            exit 1
-        }
+    if ! download "$base/$name" "$archive"; then
+        error "Could not download the release asset for v$FETCH_VERSION: $base/$name"
+        echo "Only releases published with a checksummed asset can be installed this way."
+        echo "A release tagged in the last few minutes may still be publishing it; retry shortly."
+        echo "To install a tag that has no asset, use a clone:"
+        echo "    git clone --branch v$FETCH_VERSION $REPO_URL stanza && stanza/install.sh"
+        exit 1
     fi
-
-    mkdir "$FETCH_DIR/src"
-    if ! tar -xzf "$archive" -C "$FETCH_DIR/src"; then
-        error "Could not unpack $url"
+    if ! download "$base/$name.sha256" "$archive.sha256"; then
+        error "Could not download the checksum for v$FETCH_VERSION: $base/$name.sha256"
+        echo "Refusing to install an unverified download."
         exit 1
     fi
 
-    # GitHub archives hold a single top-level directory (stanza-X.Y.Z)
+    expected="$(awk 'NR == 1 {print tolower($1)}' "$archive.sha256")"
+    if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+        error "Malformed checksum file: $base/$name.sha256"
+        echo "Refusing to install an unverified download."
+        exit 1
+    fi
+    actual="$(sha256_of "$archive")"
+    if [[ "$actual" != "$expected" ]]; then
+        error "Checksum mismatch for $name; refusing to install it"
+        echo "  expected: $expected"
+        echo "  actual:   $actual"
+        exit 1
+    fi
+    success "Verified SHA-256 $actual"
+
+    mkdir "$FETCH_DIR/src"
+    if ! tar -xzf "$archive" -C "$FETCH_DIR/src"; then
+        error "Could not unpack $base/$name"
+        exit 1
+    fi
+
+    # The asset holds a single top-level directory (stanza-X.Y.Z)
     for root in "$FETCH_DIR/src"/*/; do
         if [[ -f "$root/bin/stanza" && -d "$root/lib" ]]; then
             SOURCE_DIR="${root%/}"
@@ -281,7 +325,7 @@ fetch_release() {
         fi
     done
     if [[ -z "$SOURCE_DIR" ]]; then
-        error "bin/stanza not found in the v$FETCH_VERSION archive"
+        error "bin/stanza not found in the v$FETCH_VERSION asset"
         exit 1
     fi
 }

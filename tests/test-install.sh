@@ -50,24 +50,41 @@ assert_not_contains() {
     fi
 }
 
-# Build a stand-in for the GitHub repo: a git repo carrying the given tags,
-# with archive/refs/tags/v<version>.tar.gz beside it laid out the way GitHub
-# serves them (one top-level stanza-<version>/ directory).
+# Build a stand-in for the GitHub repo: a git repo whose tag v<version>
+# carries stanza's files with that VERSION. No assets are published yet.
 make_remote() {
     REMOTE="$SUITE_TMP/remote"
     git -c init.defaultBranch=main init -q "$REMOTE"
-    git -C "$REMOTE" commit -q --allow-empty -m "initial commit"
-    mkdir -p "$REMOTE/archive/refs/tags"
-    local v tree
+    cp -r "$STANZA_DIR/bin" "$STANZA_DIR/lib" "$STANZA_DIR/completions" "$REMOTE/"
+    local v
     for v in "$@"; do
+        echo "$v" > "$REMOTE/VERSION"
+        git -C "$REMOTE" add -A
+        git -C "$REMOTE" commit -q -m "v$v"
         git -C "$REMOTE" tag "v$v"
-        tree="$SUITE_TMP/build/stanza-$v"
-        mkdir -p "$tree"
-        cp -r "$STANZA_DIR/bin" "$STANZA_DIR/lib" "$STANZA_DIR/completions" "$tree/"
-        echo "$v" > "$tree/VERSION"
-        tar -czf "$REMOTE/archive/refs/tags/v$v.tar.gz" -C "$SUITE_TMP/build" "stanza-$v"
     done
     export STANZA_REPO_URL="file://$REMOTE"
+}
+
+# Publish v$1's asset and checksum under releases/download/v$1/, the way
+# GitHub serves release assets, built by the script the release workflow runs
+publish_asset() {
+    (cd "$REMOTE" && "$STANZA_DIR/scripts/release-asset.sh" --out "releases/download/v$1" "v$1" > /dev/null)
+}
+
+# Path of v$1's published file; $2 is "" for the asset or ".sha256"
+asset_path() {
+    echo "$REMOTE/releases/download/v$1/stanza-$1.tar.gz$2"
+}
+
+# Change one byte in the middle of file $1
+flip_byte() {
+    local file="$1" offset byte new
+    offset=$(( $(wc -c < "$file") / 2 ))
+    byte=$(od -An -tx1 -j "$offset" -N 1 "$file" | tr -d ' ')
+    new='X'
+    [[ "$byte" == "58" ]] && new='Y'
+    printf '%s' "$new" | dd of="$file" bs=1 seek="$offset" conv=notrunc 2> /dev/null
 }
 
 # Fresh HOME and TMPDIR for one case
@@ -91,8 +108,16 @@ piped() {
 SUITE_TMP=$(mktemp -d)
 trap 'rm -rf "$SUITE_TMP"' EXIT
 # Includes a prerelease and a two-digit minor, to check "latest" picks the
-# highest stable tag by number rather than by string
-make_remote 1.0.0 1.9.0 1.10.0 1.11.0a1
+# highest stable tag by number rather than by string. 1.0.1-1.0.4 are
+# published broken, one way each, for the verification cases.
+make_remote 1.0.0 1.0.1 1.0.2 1.0.3 1.0.4 1.9.0 1.10.0 1.11.0a1
+for v in 1.0.0 1.0.2 1.0.3 1.0.4 1.9.0 1.10.0; do
+    publish_asset "$v"
+done
+# 1.0.1: no asset at all (a tag from before release assets)
+flip_byte "$(asset_path 1.0.2)"             # 1.0.2: asset differs from its checksum
+rm "$(asset_path 1.0.3 .sha256)"            # 1.0.3: checksum missing
+echo "not-a-checksum  stanza-1.0.4.tar.gz" > "$(asset_path 1.0.4 .sha256)"  # 1.0.4: malformed
 
 # --- Checkout mode ---------------------------------------------------------
 
@@ -110,6 +135,8 @@ setup
 out=$(piped --yes 2>&1)
 assert_eq "installs the highest stable tag" "1.10.0" "$(installed_version)"
 assert_contains "downloads" "$out" "Downloading stanza v1.10.0"
+assert_contains "verifies the checksum" "$out" \
+    "Verified SHA-256 $(awk '{print $1}' "$(asset_path 1.10.0 .sha256)")"
 assert_eq "binary installed" "yes" "$([[ -x "$HOME/.local/bin/stanza" ]] && echo yes || echo no)"
 assert_eq "bash completion installed" "yes" \
     "$([[ -f "$HOME/.bash_completion.d/stanza" ]] && echo yes || echo no)"
@@ -146,9 +173,63 @@ setup
 status=0
 out=$(piped --yes --version 9.9.9 2>&1) || status=$?
 assert_eq "exits non-zero" "1" "$status"
-assert_contains "names the failed download" "$out" "Download failed"
+assert_contains "names the failed download" "$out" "Could not download the release asset for v9.9.9"
 assert_eq "nothing installed" "none" "$(installed_version)"
 assert_eq "temp directory removed" "" "$(ls -A "$TMPDIR")"
+
+# --- Verification ----------------------------------------------------------
+
+echo "Tag without a release asset"
+setup
+status=0
+out=$(piped --yes --version 1.0.1 2>&1) || status=$?
+assert_eq "exits non-zero" "1" "$status"
+assert_contains "names the missing asset" "$out" "Could not download the release asset for v1.0.1"
+assert_contains "points at the clone path" "$out" "git clone --branch v1.0.1"
+assert_eq "nothing installed" "none" "$(installed_version)"
+assert_eq "temp directory removed" "" "$(ls -A "$TMPDIR")"
+
+echo "Asset that does not match its checksum"
+setup
+status=0
+out=$(piped --yes --version 1.0.2 2>&1) || status=$?
+assert_eq "exits non-zero" "1" "$status"
+assert_contains "reports the mismatch" "$out" "Checksum mismatch for stanza-1.0.2.tar.gz"
+assert_not_contains "does not unpack it" "$out" "Verified"
+assert_eq "nothing installed" "none" "$(installed_version)"
+assert_eq "temp directory removed" "" "$(ls -A "$TMPDIR")"
+
+echo "Asset without a checksum"
+setup
+status=0
+out=$(piped --yes --version 1.0.3 2>&1) || status=$?
+assert_eq "exits non-zero" "1" "$status"
+assert_contains "names the missing checksum" "$out" "Could not download the checksum for v1.0.3"
+assert_eq "nothing installed" "none" "$(installed_version)"
+
+echo "Malformed checksum"
+setup
+status=0
+out=$(piped --yes --version 1.0.4 2>&1) || status=$?
+assert_eq "exits non-zero" "1" "$status"
+assert_contains "rejects it" "$out" "Malformed checksum file"
+assert_eq "nothing installed" "none" "$(installed_version)"
+
+echo "shasum when sha256sum is absent"
+if command -v shasum > /dev/null; then
+    setup
+    nosum="$CASE_TMP/nosum"
+    mkdir -p "$nosum"
+    # A PATH of links to every tool on PATH except sha256sum
+    while IFS= read -r -d '' tool; do
+        name=$(basename "$tool")
+        [[ "$name" == sha256sum || -e "$nosum/$name" ]] || ln -s "$tool" "$nosum/$name"
+    done < <(IFS=:; for d in $PATH; do [[ -d "$d" ]] && find "$d" -maxdepth 1 \( -type f -o -type l \) -perm -u+x -print0 2>/dev/null; done)
+    PATH="$nosum" bash -s -- --yes --version 1.9.0 < "$INSTALLER" > /dev/null 2>&1 || true
+    assert_eq "installs with shasum" "1.9.0" "$(installed_version)"
+else
+    echo "  SKIP: shasum not available"
+fi
 
 echo "Invalid version"
 setup
