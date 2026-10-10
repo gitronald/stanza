@@ -5,7 +5,7 @@ status: active
 branch: feature/ledger-installer-output
 created: 2026-10-10T13:53:07-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/12
 ---
 
 # Restyle installer output in the ledger row grammar
@@ -212,3 +212,4 @@ And for a checksum mismatch (stderr):
     under util-linux `script`). The rest of `tests/` passed. shellcheck is
     not installed here, so it did not run. Not run under bash 3.2. That and
     the Terminal profiles are plan 010's, on a Mac.
+- **2026-10-10T14:14:16-07:00** — PR opened: https://github.com/gitronald/stanza/pull/12
