@@ -1,7 +1,7 @@
 ---
 id: 2
 slug: release-without-pr
-status: active
+status: implemented
 branch: feature/release-without-pr
 created: 2026-10-09T14:47:27-07:00
 concluded:
@@ -89,3 +89,4 @@ rejected push leaves no tag on the remote.
   - Worktree: `.worktrees/release-without-pr`
   - PR: pending
 - **2026-10-09T17:22:39-07:00** — PR opened: https://github.com/gitronald/stanza/pull/4
+- **2026-10-09T17:22:40-07:00** — Implemented: 3 commits ahead of `dev`.
