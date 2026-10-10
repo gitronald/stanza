@@ -59,6 +59,8 @@ on whatever bash that machine has (5.x here). Two gaps follow.
 
 1. Is `jq` acceptable as a test-only dependency, or use `uv run` for JSON
    validation? (uv is already assumed by the uv project tests.)
+   **Answered 2026-10-09: yes, `jq` is fine as a test dependency.** Use
+   `jq -e .` for JSON validation in the matrix.
 2. Should ShellCheck gate CI from day one, or report only until the
    remaining findings are triaged?
 
