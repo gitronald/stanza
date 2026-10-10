@@ -213,11 +213,7 @@ CREATE_REPO_ARGS=(repo create "$REPO_NAME" --"$VISIBILITY" --source=. --remote=o
 if [[ -n "$DESCRIPTION" ]]; then
     CREATE_REPO_ARGS+=(--description "$DESCRIPTION")
 fi
-if [[ "$VERBOSITY" -ge 2 ]]; then
-    gh "${CREATE_REPO_ARGS[@]}"
-else
-    gh "${CREATE_REPO_ARGS[@]}" >/dev/null 2>&1
-fi
+run_verbose gh "${CREATE_REPO_ARGS[@]}"
 
 REPO_URL=$(gh repo view --json url --jq .url)
 ORIGIN_URL=$(git remote get-url origin)
@@ -239,11 +235,7 @@ elif [[ "$PUSH_ALL_BRANCHES" == true ]]; then
         print_warning "No branches found to push"
     else
         for branch in $branches; do
-            if [[ "$VERBOSITY" -ge 2 ]]; then
-                git push -u origin "$branch"
-            else
-                git push -u origin "$branch" >/dev/null 2>&1
-            fi
+            run_verbose git push -u origin "$branch"
             PUSHED_BRANCH_COUNT=$((PUSHED_BRANCH_COUNT + 1))
         done
         # shellcheck disable=SC2001
@@ -251,11 +243,7 @@ elif [[ "$PUSH_ALL_BRANCHES" == true ]]; then
         print_row push "$PUSHED_BRANCHES  ($PUSHED_BRANCH_COUNT branches)"
     fi
 else
-    if [[ "$VERBOSITY" -ge 2 ]]; then
-        git push -u origin "$CURRENT_BRANCH"
-    else
-        git push -u origin "$CURRENT_BRANCH" >/dev/null 2>&1
-    fi
+    run_verbose git push -u origin "$CURRENT_BRANCH"
     PUSHED_BRANCHES="$CURRENT_BRANCH"
     PUSHED_BRANCH_COUNT=1
     print_row push "$CURRENT_BRANCH (current only)"
@@ -272,7 +260,7 @@ if git tag | grep -q .; then
         TAGS_PUSHED=true
     else
         read -p "Push all tags to remote? (y/N): " -n 1 -r
-        echo
+        print_progress echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             git push origin --tags >/dev/null 2>&1
             print_row tags "pushed ($TAG_COUNT tags)"
@@ -300,7 +288,9 @@ json_emit
 
 if [[ "$VERBOSITY" -le 0 ]]; then
     # Quiet mode: print only the repo URL
-    [[ "$JSON_OUTPUT" != "true" ]] && echo "$REPO_URL"
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+        echo "$REPO_URL"
+    fi
 else
     print_done "$REPO_URL"
 fi

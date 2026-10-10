@@ -627,7 +627,9 @@ handle_prerelease_workflow() {
 
     if [[ "$VERBOSITY" -le 0 ]]; then
         # Quiet mode: just the new version on stdout
-        [[ "$JSON_OUTPUT" != "true" ]] && echo "$new_version"
+        if [[ "$JSON_OUTPUT" != "true" ]]; then
+            echo "$new_version"
+        fi
     else
         print_done "$new_version on $CURRENT_BRANCH"
     fi
@@ -925,7 +927,9 @@ case "$PHASE" in
         json_emit
 
         if [[ "$VERBOSITY" -le 0 ]]; then
-            [[ "$JSON_OUTPUT" != "true" ]] && echo "$RELEASE_VERSION"
+            if [[ "$JSON_OUTPUT" != "true" ]]; then
+                echo "$RELEASE_VERSION"
+            fi
         elif [[ "$NO_DEV_PRERELEASE" == "true" ]]; then
             print_done "released $version_tag; dev prerelease cycle skipped"
         else
@@ -962,7 +966,9 @@ case "$PHASE" in
 
         print_hint "review the PR, then: stanza release merge"
         if [[ "$VERBOSITY" -le 0 ]]; then
-            [[ "$JSON_OUTPUT" != "true" ]] && echo "$RELEASE_VERSION"
+            if [[ "$JSON_OUTPUT" != "true" ]]; then
+                echo "$RELEASE_VERSION"
+            fi
         else
             print_done "$version_tag opened on dev; review, then: stanza release merge"
         fi
@@ -1012,7 +1018,9 @@ case "$PHASE" in
         json_emit
 
         if [[ "$VERBOSITY" -le 0 ]]; then
-            [[ "$JSON_OUTPUT" != "true" ]] && echo "$RELEASE_VERSION"
+            if [[ "$JSON_OUTPUT" != "true" ]]; then
+                echo "$RELEASE_VERSION"
+            fi
         elif [[ "$NO_DEV_PRERELEASE" == "true" ]]; then
             print_done "released $version_tag; dev prerelease cycle skipped"
         else

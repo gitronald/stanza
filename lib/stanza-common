@@ -140,15 +140,34 @@ print_row_v() {
 
 JSON_BUFFER=""
 
-# Escape a string for JSON output: backslashes, double quotes, common controls.
+# Escape a string for JSON output: backslashes, double quotes, all controls.
+# Bash strings cannot contain NUL; every other byte below 0x20 is escaped.
 json_escape() {
     local s="$1"
+    local LC_ALL=C
     s="${s//\\/\\\\}"
     s="${s//\"/\\\"}"
+    # Ordinary strings avoid the character loop entirely.
+    if [[ "$s" != *[$'\001'-$'\037']* ]]; then
+        printf "%s" "$s"
+        return 0
+    fi
+    s="${s//$'\b'/\\b}"
+    s="${s//$'\f'/\\f}"
     s="${s//$'\n'/\\n}"
     s="${s//$'\r'/\\r}"
     s="${s//$'\t'/\\t}"
-    printf "%s" "$s"
+    local i ch escaped result=""
+    for ((i = 0; i < ${#s}; i++)); do
+        ch="${s:i:1}"
+        if [[ "$ch" == [$'\001'-$'\037'] ]]; then
+            printf -v escaped '\\u%04x' "'$ch"
+            result="$result$escaped"
+        else
+            result="$result$ch"
+        fi
+    done
+    printf "%s" "$result"
 }
 
 # Append a string-valued field. Always emits a quoted JSON string, including
@@ -774,7 +793,7 @@ should_skip_remote() {
 # Usage: git_quiet push origin main
 git_quiet() {
     if [[ "$VERBOSE" == "true" ]]; then
-        git "$@"
+        print_progress git "$@"
     else
         git "$@" > /dev/null 2>&1
     fi
@@ -784,14 +803,36 @@ git_quiet() {
 # Usage: gh_quiet pr merge "$PR_NUMBER" --merge
 gh_quiet() {
     if [[ "$VERBOSE" == "true" ]]; then
-        gh "$@"
+        print_progress gh "$@"
     else
         gh "$@" > /dev/null 2>&1
     fi
 }
 
+# Route human output without interfering with commands that return data.
+print_progress() {
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        "$@" >&2
+    else
+        "$@"
+    fi
+}
+
+# Init shows command output from the first verbose tier.
+run_verbose() {
+    if [[ "$VERBOSITY" -ge 2 ]]; then
+        print_progress "$@"
+    else
+        "$@" >/dev/null 2>&1
+    fi
+}
+
 # User confirmation with customizable exit message
 confirm_step() {
+    print_progress _confirm_step "$@"
+}
+
+_confirm_step() {
     local description="$1"
     local exit_message="${2:-Exiting workflow}"
 
