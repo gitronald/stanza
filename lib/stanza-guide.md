@@ -54,6 +54,24 @@ the base branch back into `dev` to keep histories in sync. `--no-dev-cycle`
 skips that sync-back too, leaving `dev` behind the tagged release until you merge
 the base branch back yourself.
 
+## Releasing without a PR
+
+`--no-pr` merges `dev` into the base branch directly instead of through a PR,
+then pushes the base branch and the tag together. Every other step (bump,
+changelog promotion, tag, dev cycle) runs as usual. It applies to the one-shot
+release and to `merge`; `release pr` ignores it with a warning, as `--pr-note`
+is ignored with a warning when no PR is opened.
+
+```bash
+stanza release patch -y --no-pr      # bump, merge dev directly, tag, new cycle
+stanza release merge -y --no-pr      # phase 2, merging dev instead of the PR
+```
+
+The base branch and the tag are pushed atomically, so a protected base branch
+refuses both: no tag lands on the remote. The bump is already on `origin/dev`
+by then, and the error names the recovery: reset the local base branch to its
+remote, open the PR, and run `stanza release merge`.
+
 ## Attaching a note to the PR
 
 `--pr-note` appends text to the PR body (applies to the `pr` and full phases):

@@ -621,6 +621,177 @@ test_release_json_records_doc_syncs() {
     cleanup
 }
 
+# --- --no-pr (plan 002) ----------------------------------------------------
+
+test_no_pr_full_release() {
+    echo ""
+    echo "Full --no-pr release merges dev directly and pushes main with the tag"
+    setup_remote_repo
+
+    local out
+    out=$(NO_COLOR=1 "$STANZA" --json release patch -y --no-pr 2>/dev/null)
+    assert_eq "no PR opened" "" "$(cat "$GH_MOCK_STATE/number" 2>/dev/null)"
+    assert_eq "tag created" "v0.1.0" "$(git tag -l v0.1.0)"
+    assert_eq "tag sits on the no-PR release merge" "version [release]: v0.1.0" \
+        "$(git log -1 --format=%s v0.1.0)"
+    assert_eq "remote main is the release merge" "$(git rev-parse v0.1.0)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse main)"
+    assert_eq "tag pushed" "$(git rev-parse v0.1.0)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse v0.1.0^{commit} 2>/dev/null)"
+    assert_eq "back on dev" "dev" "$(git branch --show-current)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "dev cycle pushed" "$(git rev-parse dev)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse dev)"
+    assert_contains "JSON pr is null" "$out" '"pr":null'
+    assert_contains "JSON tag pushed" "$out" '"pushed":true}'
+
+    teardown_remote_repo
+}
+
+test_no_pr_merge_phase() {
+    echo ""
+    echo "release merge --no-pr merges dev directly after the pr phase"
+    setup_remote_repo
+
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    NO_COLOR=1 "$STANZA" release merge -y --no-pr >/dev/null 2>&1
+    assert_eq "tag created" "v0.1.0" "$(git tag -l v0.1.0)"
+    assert_eq "gh merge not called" "" "$(cat "$GH_MOCK_STATE/merge_subject" 2>/dev/null)"
+    assert_eq "tag sits on the no-PR release merge" "version [release]: v0.1.0" \
+        "$(git log -1 --format=%s v0.1.0)"
+    assert_eq "remote main is the release merge" "$(git rev-parse v0.1.0)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse main)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+
+    teardown_remote_repo
+}
+
+test_no_pr_protected_base_pushes_nothing() {
+    echo ""
+    echo "--no-pr against a protected base: push refused, no tag on the remote"
+    setup_remote_repo
+
+    # An update hook refuses per ref, as GitHub branch protection does
+    # (pre-receive would refuse the whole push and hide a non-atomic push).
+    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
+#!/bin/bash
+[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }
+exit 0
+HOOK
+    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+
+    local err exit_code=0
+    err=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || exit_code=$?
+    assert_eq "exits non-zero" "1" "$exit_code"
+    assert_eq "no tag on the remote" "" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" tag -l)"
+    assert_eq "local tag removed" "" "$(git tag -l v0.1.0)"
+    assert_eq "bump is on origin/dev" "0.1.0" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" show dev:VERSION)"
+    assert_contains "hints the PR recovery" "$err" "stanza release merge"
+    assert_contains "hints resetting the base branch" "$err" "git branch -f main origin/main"
+    assert_contains "shows the remote's refusal" "$err" "remote: main is protected"
+
+    teardown_remote_repo
+}
+
+test_no_pr_merge_phase_protected_skips_pr_create() {
+    echo ""
+    echo "merge --no-pr refused after 'release pr': the hint does not reopen a PR"
+    setup_remote_repo
+
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
+#!/bin/bash
+[[ "$1" == refs/heads/main ]] && { echo "main is protected" >&2; exit 1; }
+exit 0
+HOOK
+    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+
+    local err exit_code=0
+    err=$(NO_COLOR=1 "$STANZA" release merge -y --no-pr 2>&1) || exit_code=$?
+    assert_eq "exits non-zero" "1" "$exit_code"
+    assert_not_contains "no gh pr create hint" "$err" "gh pr create"
+    assert_contains "hints the merge recovery" "$err" "stanza release merge"
+
+    teardown_remote_repo
+}
+
+test_no_pr_diverged_base_hint() {
+    echo ""
+    echo "--no-pr with a diverged base branch: the hint returns to dev first"
+    setup_remote_repo
+
+    git checkout -q main
+    git commit -q --allow-empty -m "local only"
+    git checkout -q -b remote-side origin/main
+    git commit -q --allow-empty -m "remote only"
+    git push -q origin remote-side:main
+    git checkout -q dev
+    git branch -q -D remote-side
+
+    local err exit_code=0
+    err=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || exit_code=$?
+    assert_eq "exits non-zero" "1" "$exit_code"
+    assert_contains "hint checks out dev before the merge phase" "$err" \
+        "git checkout dev && stanza release merge --no-pr"
+
+    teardown_remote_repo
+}
+
+test_no_pr_ignored_by_prerelease() {
+    echo ""
+    echo "prerelease --no-pr warns and the header does not claim 'no PR'"
+    setup_remote_repo
+
+    local out
+    out=$(NO_COLOR=1 "$STANZA" release prerelease -y --no-pr 2>&1)
+    assert_contains "warns --no-pr is ignored" "$out" "--no-pr is ignored by prerelease"
+    assert_not_contains "header lacks 'no PR'" "$out" ", no PR"
+
+    teardown_remote_repo
+}
+
+test_pr_path_push_failure_hints_dev_cycle() {
+    echo ""
+    echo "PR release whose tag push is refused: the hint covers the dev cycle"
+    setup_remote_repo
+
+    cat > "$TEST_TMPDIR/remote.git/hooks/update" <<'HOOK'
+#!/bin/bash
+[[ "$1" == refs/tags/* ]] && { echo "tags are refused" >&2; exit 1; }
+exit 0
+HOOK
+    chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+
+    local err exit_code=0
+    err=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || exit_code=$?
+    assert_eq "exits non-zero" "1" "$exit_code"
+    assert_contains "shows the remote's refusal" "$err" "remote: tags are refused"
+    assert_contains "hints the retry" "$err" "git push --atomic origin main refs/tags/v0.1.0"
+    assert_contains "hints the dev cycle" "$err" "stanza release prerelease -y"
+
+    teardown_remote_repo
+}
+
+test_no_pr_ignored_flags_warn() {
+    echo ""
+    echo "--no-pr is ignored by 'release pr'; --pr-note is ignored with --no-pr"
+    setup_remote_repo
+
+    local err
+    err=$(NO_COLOR=1 "$STANZA" release pr patch -y --no-pr 2>&1 >/dev/null)
+    assert_contains "warns --no-pr is ignored by pr" "$err" "--no-pr is ignored"
+    assert_eq "pr phase still opened a PR" "open" "$(cat "$GH_MOCK_STATE/state")"
+    teardown_remote_repo
+
+    setup_remote_repo
+    err=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr --pr-note "a note" 2>&1 >/dev/null)
+    assert_contains "warns --pr-note is ignored" "$err" "--pr-note is ignored with --no-pr"
+    assert_eq "release still tagged" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+}
+
 # --- Run -------------------------------------------------------------------
 
 trap cleanup EXIT
@@ -641,6 +812,14 @@ test_release_promotes_changelog_and_readme
 test_empty_changelog_blocks_release
 test_no_changelog_flag_bypasses_block
 test_release_json_records_doc_syncs
+test_no_pr_full_release
+test_no_pr_merge_phase
+test_no_pr_protected_base_pushes_nothing
+test_no_pr_ignored_flags_warn
+test_no_pr_merge_phase_protected_skips_pr_create
+test_no_pr_diverged_base_hint
+test_no_pr_ignored_by_prerelease
+test_pr_path_push_failure_hints_dev_cycle
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

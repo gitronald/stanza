@@ -21,7 +21,7 @@ stanza writes these commits itself:
 | Version bump on `dev` | `version [patch\|minor\|major]: <version>` |
 | Prerelease bump, including the post-release dev cycle | `version [prerelease]: <version>` |
 | Release merge of the PR into the base branch | `version [release]: v<version> - PR #<N>` |
-| Release merge without a PR (`--local` or no remote) | `version [release]: v<version>` |
+| Release merge without a PR (`--no-pr`, `--local`, or no remote) | `version [release]: v<version>` |
 | Back-merge of the base branch into `dev` (remote mode; local mode fast-forwards `dev`) | `Merge branch '<base>' into dev` |
 | Tag | `v<version>`, lightweight, on the release merge |
 
