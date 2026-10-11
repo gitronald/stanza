@@ -126,6 +126,13 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 
 # Write a gh mock that records a single PR in $GH_MOCK_STATE and performs a
 # real local merge (against the bare remote) on `gh pr merge`.
+#
+# CI is scripted per call: the Nth `gh pr checks` prints $GH_MOCK_STATE/checks.N
+# (or the highest-numbered file once the calls run past it), already in the
+# "<bucket>\t<name>" form stanza's --jq asks for. No file, or one that reads
+# NONE, is gh's "no checks reported" error. `gh run list` does the same with
+# runs.N ("<status>\t<conclusion>\t<workflow>" lines; no file prints nothing)
+# and records each --commit it was asked about in runs_commits.
 make_gh_mock() {
     local bindir="$1"
     mkdir -p "$bindir"
@@ -133,9 +140,31 @@ make_gh_mock() {
 #!/bin/bash
 set -e
 STATE="${GH_MOCK_STATE:?}"
+# Print the scripted response for call N of a CI read (see make_gh_mock).
+scripted() {
+  local kind="$1" n f
+  n=$(( $(cat "$STATE/$kind.calls" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$STATE/$kind.calls"
+  f="$STATE/$kind.$n"
+  if [[ ! -f "$f" ]]; then
+    f=$(ls "$STATE/$kind".[0-9]* 2>/dev/null | sort -t. -k2 -n | tail -1)
+  fi
+  [[ -n "$f" ]] && cat "$f"
+}
 cmd="$1"; shift || true
 case "$cmd" in
   auth) exit 0 ;;
+  run)
+    [[ "${1:-}" == list ]] || exit 0
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --commit) echo "$2" >> "$STATE/runs_commits"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    scripted runs || true
+    ;;
   pr)
     sub="$1"; shift || true
     case "$sub" in
@@ -188,6 +217,14 @@ case "$cmd" in
             ;;
           *) printf '' ;;
         esac
+        ;;
+      checks)
+        out=$(scripted checks || true)
+        if [[ -z "$out" || "$out" == NONE ]]; then
+          echo "no checks reported on the 'dev' branch" >&2
+          exit 1
+        fi
+        printf '%s\n' "$out"
         ;;
       edit)
         shift || true   # PR number
@@ -253,6 +290,8 @@ setup_remote_repo() {
     GH_MOCK_STATE="$TEST_TMPDIR/ghstate"
     mkdir -p "$GH_MOCK_STATE"
     export GH_MOCK_STATE
+    # Scripted CI answers at once: no grace period and no poll interval.
+    export STANZA_CHECKS_GRACE_SECONDS=0 STANZA_CHECKS_INTERVAL=0
     make_gh_mock "$TEST_TMPDIR/bin"
     ORIG_PATH="$PATH"
     PATH="$TEST_TMPDIR/bin:$PATH"
@@ -261,7 +300,7 @@ setup_remote_repo() {
 
 teardown_remote_repo() {
     [[ -n "$ORIG_PATH" ]] && PATH="$ORIG_PATH" && export PATH
-    unset GH_MOCK_STATE
+    unset GH_MOCK_STATE STANZA_CHECKS_GRACE_SECONDS STANZA_CHECKS_INTERVAL STANZA_CHECKS_TIMEOUT
     if [[ -n "${STALL_PID:-}" ]]; then
         kill "$STALL_PID" 2>/dev/null || true
         wait "$STALL_PID" 2>/dev/null || true
@@ -326,6 +365,10 @@ arm_step_failure() {
         pr)
             touch "$GH_MOCK_STATE/create_fail"
             echo "could not create the pull request"
+            ;;
+        checks)
+            printf 'fail\ttest\n' > "$GH_MOCK_STATE/checks.1"
+            echo "has failing checks: test"
             ;;
         merge)
             touch "$GH_MOCK_STATE/merge_fail"
@@ -888,7 +931,7 @@ test_failed_step_is_named() {
     echo ""
     echo "A failure in each release step names the step and keeps the error"
     local step expect out json code row
-    for step in bump push pr merge tag cycle; do
+    for step in bump push pr checks merge tag cycle; do
         setup_remote_repo
         expect=$(arm_step_failure "$step")
         code=0
@@ -922,7 +965,7 @@ test_failed_step_json_fields() {
     local json
     json=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null) || true
     assert_contains "completed steps in order" "$json" \
-        '"completed_steps":["bump","push","pr","merge","tag"]'
+        '"completed_steps":["bump","push","pr","checks","merge","tag"]'
     assert_contains "error names the failed call" "$json" '"error":"git push origin dev failed (exit 1)"'
     assert_contains "resume is release merge" "$json" '"resume":"git checkout dev && stanza release merge -y"'
     teardown_remote_repo
@@ -1207,6 +1250,266 @@ test_local_release_without_gh() {
 }
 test_local_release_without_gh
 
+# --- CI gate ---------------------------------------------------------------
+
+test_checks_pass_then_merge() {
+    echo ""
+    echo "The release merge waits for passing checks, including pending ones"
+    setup_remote_repo
+    printf 'pending\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    printf 'pass\ttest\npass\tlint\n' > "$GH_MOCK_STATE/checks.2"
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "release succeeds" "0" "$code"
+    assert_contains "waiting row names the pending check" "$out" "checks  waiting on test"
+    assert_contains "passed row after the wait" "$out" "checks  2 passed after"
+    assert_eq "checks polled twice" "2" "$(cat "$GH_MOCK_STATE/checks.calls")"
+    assert_eq "tag created" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+
+    setup_remote_repo
+    printf 'pass\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    out=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null)
+    assert_contains "JSON checks passed" "$out" '"checks":"passed"'
+    teardown_remote_repo
+}
+
+test_checks_fail_stops_merge() {
+    echo ""
+    echo "A failing check stops the release before the merge; the merge resumes it"
+    setup_remote_repo
+    printf 'pass\tlint\nfail\ttest\npending\tdocs\n' > "$GH_MOCK_STATE/checks.1"
+    local before out code=0 json
+    before=$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse main)
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "exits 1" "1" "$code"
+    assert_contains "names the failing check" "$out" "PR #1 has failing checks: test"
+    assert_contains "checks row failed" "$out" "checks  failed; PR #1 is open; nothing is merged or tagged"
+    assert_contains "resume with release merge" "$out" "resume: git checkout dev && stanza release merge -y"
+    assert_contains "says to fix on dev first" "$out" "fix the failing checks on dev and push"
+    assert_contains "names the override" "$out" "stanza release merge -y --skip-checks"
+    assert_not_contains "does not suggest a second bump" "$out" "stanza release pr"
+    assert_eq "gh merge not called" "" "$(cat "$GH_MOCK_STATE/merge_subject" 2>/dev/null)"
+    assert_eq "remote main unchanged" "$before" "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse main)"
+    assert_eq "no tag" "" "$(git tag)"
+    assert_eq "PR left open" "open" "$(cat "$GH_MOCK_STATE/state")"
+    assert_eq "still on dev" "dev" "$(git branch --show-current)"
+
+    # Fix on dev and push: the PR head follows dev, and the merge resumes.
+    echo fix > fix.txt
+    git add fix.txt
+    git commit -q -m "fix the test"
+    git push -q origin dev
+    git rev-parse dev > "$GH_MOCK_STATE/head"
+    rm -f "$GH_MOCK_STATE"/checks.*
+    printf 'pass\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_eq "resume tags the release" "v0.1.0" "$(git tag -l v0.1.0)"
+    assert_eq "release carries the fix" "yes" \
+        "$(git merge-base --is-ancestor "$(git log -1 --format=%H --grep='fix the test' dev)" v0.1.0 && echo yes || echo no)"
+    teardown_remote_repo
+
+    setup_remote_repo
+    printf 'cancel\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    code=0
+    json=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null) || code=$?
+    assert_eq "cancelled check exits 1" "1" "$code"
+    assert_contains "JSON names the checks step" "$json" '"failed_step":"checks"'
+    assert_contains "JSON completed steps" "$json" '"completed_steps":["bump","push","pr"]'
+    assert_contains "JSON error names the check" "$json" '"error":"PR #1 has failing checks: test"'
+    teardown_remote_repo
+}
+
+test_checks_none_reported() {
+    echo ""
+    echo "No checks is a pass, after the grace period"
+    setup_remote_repo
+    local out
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1)
+    assert_contains "none reported row" "$out" "checks  none reported"
+    assert_eq "tag created" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+
+    setup_remote_repo
+    out=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null)
+    assert_contains "JSON checks none" "$out" '"checks":"none"'
+    teardown_remote_repo
+
+    # Checks that register late are waited on, not taken for none.
+    setup_remote_repo
+    echo NONE > "$GH_MOCK_STATE/checks.1"
+    printf 'fail\ttest\n' > "$GH_MOCK_STATE/checks.2"
+    local code=0
+    out=$(STANZA_CHECKS_GRACE_SECONDS=30 NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "late failing check stops the release" "1" "$code"
+    assert_contains "late check is read" "$out" "has failing checks: test"
+    assert_eq "no tag" "" "$(git tag)"
+    teardown_remote_repo
+}
+
+test_checks_timeout() {
+    echo ""
+    echo "Checks still pending at STANZA_CHECKS_TIMEOUT stop the release"
+    setup_remote_repo
+    printf 'pending\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    local out code=0
+    out=$(STANZA_CHECKS_TIMEOUT=1 STANZA_CHECKS_INTERVAL=1 NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "exits 1" "1" "$code"
+    assert_contains "names the timeout" "$out" "PR #1 checks still pending after 1s: test"
+    assert_contains "resume waits again" "$out" "resume: git checkout dev && stanza release merge -y"
+    assert_contains "names the setting" "$out" "STANZA_CHECKS_TIMEOUT"
+    assert_eq "no tag" "" "$(git tag)"
+    assert_eq "PR left open" "open" "$(cat "$GH_MOCK_STATE/state")"
+    teardown_remote_repo
+}
+
+test_checks_read_error_stops_merge() {
+    echo ""
+    echo "A PR whose checks cannot be read is not merged"
+    setup_remote_repo
+    "$STANZA" release pr patch -y >/dev/null 2>&1
+    # A gh that fails on checks, otherwise the mock.
+    cat > "$TEST_TMPDIR/bin/gh-real" < "$TEST_TMPDIR/bin/gh"
+    chmod +x "$TEST_TMPDIR/bin/gh-real"
+    printf '#!/bin/bash\n[[ "$1 $2" == "pr checks" ]] && { echo "HTTP 502" >&2; exit 1; }\nexec "%s" "$@"\n' \
+        "$TEST_TMPDIR/bin/gh-real" > "$TEST_TMPDIR/bin/gh"
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "exits 1" "1" "$code"
+    assert_contains "says the checks were not read" "$out" "could not read the checks of PR #1"
+    assert_contains "shows gh's output" "$out" "HTTP 502"
+    assert_eq "no tag" "" "$(git tag)"
+    teardown_remote_repo
+}
+
+test_skip_checks() {
+    echo ""
+    echo "--skip-checks merges without reading the checks"
+    setup_remote_repo
+    printf 'fail\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    printf 'completed\tfailure\tCI\n' > "$GH_MOCK_STATE/runs.1"
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y --skip-checks 2>&1) || code=$?
+    assert_eq "release succeeds" "0" "$code"
+    assert_contains "skipped row" "$out" "checks  skipped (--skip-checks)"
+    assert_contains "warns" "$out" "merging without waiting for CI (--skip-checks)"
+    assert_eq "checks never read" "" "$(cat "$GH_MOCK_STATE/checks.calls" 2>/dev/null)"
+    assert_eq "dev runs never read" "" "$(cat "$GH_MOCK_STATE/runs.calls" 2>/dev/null)"
+    assert_eq "tag created" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+
+    setup_remote_repo
+    printf 'fail\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    out=$(NO_COLOR=1 "$STANZA" --json release patch -y --skip-checks 2>/dev/null)
+    assert_contains "JSON checks skipped" "$out" '"checks":"skipped"'
+    teardown_remote_repo
+
+    setup_remote_repo
+    out=$(NO_COLOR=1 "$STANZA" release pre -y --skip-checks 2>&1)
+    assert_contains "prerelease warns that it reads no checks" "$out" "--skip-checks is ignored by prerelease"
+    teardown_remote_repo
+}
+
+test_red_dev_blocks_bump() {
+    echo ""
+    echo "A dev whose head failed CI is not bumped"
+    local mode out code json
+    for mode in pr no-pr; do
+        setup_remote_repo
+        printf 'completed\tsuccess\tlint\ncompleted\tfailure\ttests\n' > "$GH_MOCK_STATE/runs.1"
+        local flags=(-y)
+        [[ "$mode" == no-pr ]] && flags+=(--no-pr)
+        code=0
+        out=$(NO_COLOR=1 "$STANZA" release patch "${flags[@]}" 2>&1) || code=$?
+        assert_eq "$mode: exits 1" "1" "$code"
+        assert_contains "$mode: names the failed run" "$out" "CI failed on dev's head"
+        assert_contains "$mode: lists only the failed workflow" "$out" "): tests; not bumping"
+        assert_contains "$mode: names the override" "$out" "--skip-checks"
+        assert_eq "$mode: version unchanged" "0.1.0a0" "$(cat VERSION)"
+        assert_eq "$mode: no bump commit" "version [prerelease]: 0.1.0a0" "$(git log -1 --format=%s)"
+        assert_eq "$mode: read dev's head" "$(git rev-parse dev)" "$(head -1 "$GH_MOCK_STATE/runs_commits")"
+        teardown_remote_repo
+    done
+
+    setup_remote_repo
+    printf 'completed\tfailure\ttests\n' > "$GH_MOCK_STATE/runs.1"
+    code=0
+    json=$(NO_COLOR=1 "$STANZA" --json release pr patch -y 2>/dev/null) || code=$?
+    assert_eq "pr phase: exits 1" "1" "$code"
+    assert_contains "pr phase: refusal is preflight" "$json" '"failed_step":"preflight"'
+    teardown_remote_repo
+
+    # Runs still in progress on dev are not waited on before the bump.
+    setup_remote_repo
+    printf 'in_progress\t\ttests\n' > "$GH_MOCK_STATE/runs.1"
+    code=0
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1 || code=$?
+    assert_eq "pending dev runs do not block the bump" "0" "$code"
+    assert_eq "bumped" "0.1.0" "$(cat VERSION)"
+    teardown_remote_repo
+}
+
+test_no_pr_waits_for_dev_runs() {
+    echo ""
+    echo "--no-pr waits for the runs on dev's head and stops on a failure"
+    setup_remote_repo
+    # Call 1 is the pre-bump read; calls 2+ read the release commit.
+    printf 'completed\tsuccess\tCI\n' > "$GH_MOCK_STATE/runs.1"
+    printf 'in_progress\t\tCI\n' > "$GH_MOCK_STATE/runs.2"
+    printf 'completed\tsuccess\tCI\n' > "$GH_MOCK_STATE/runs.3"
+    local out code=0 before
+    out=$(NO_COLOR=1 "$STANZA" --json release patch -y --no-pr 2>/dev/null) || code=$?
+    assert_eq "passing runs: exits 0" "0" "$code"
+    assert_contains "JSON checks passed" "$out" '"checks":"passed"'
+    assert_eq "gate read the release commit" "$(git rev-parse v0.1.0^2)" "$(tail -1 "$GH_MOCK_STATE/runs_commits")"
+    assert_eq "tag created" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+
+    setup_remote_repo
+    printf 'completed\tsuccess\tCI\n' > "$GH_MOCK_STATE/runs.1"
+    printf 'completed\tfailure\tCI\n' > "$GH_MOCK_STATE/runs.2"
+    before=$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse main)
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || code=$?
+    assert_eq "failed run: exits 1" "1" "$code"
+    assert_contains "names the failed run" "$out" "has failing checks: CI"
+    assert_contains "checks row failed" "$out" "checks  failed; v0.1.0 is pushed to dev; nothing is merged or tagged"
+    assert_contains "resume with merge --no-pr" "$out" "stanza release merge --no-pr -y"
+    assert_eq "remote main unchanged" "$before" "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse main)"
+    assert_eq "local main unchanged" "$before" "$(git rev-parse main)"
+    assert_eq "no tag" "" "$(git tag)"
+    teardown_remote_repo
+
+    # The merge phase reads the runs too.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    rm -f "$GH_MOCK_STATE"/runs.*
+    printf 'completed\tfailure\tCI\n' > "$GH_MOCK_STATE/runs.1"
+    code=0
+    NO_COLOR=1 "$STANZA" release merge -y --no-pr >/dev/null 2>&1 || code=$?
+    assert_eq "merge --no-pr: failed run exits 1" "1" "$code"
+    assert_eq "merge --no-pr: no tag" "" "$(git tag)"
+    teardown_remote_repo
+}
+
+test_no_pr_without_gh() {
+    echo ""
+    echo "--no-pr without gh releases and says the runs were not read"
+    setup_remote_repo
+    local bindir="$TEST_TMPDIR/nogh-bin" cmd code=0 out
+    mkdir -p "$bindir"
+    for cmd in bash git dirname head tr sed grep date awk mv cat wc mktemp rm sleep; do
+        ln -s "$(command -v "$cmd")" "$bindir/$cmd"
+    done
+    out=$(PATH="$bindir" NO_COLOR=1 "$STANZA" release patch --no-pr -y 2>&1) || code=$?
+    assert_eq "exits 0" "0" "$code"
+    assert_contains "not-read row" "$out" "checks  not read (gh is not installed or not authenticated)"
+    assert_eq "tag created" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+}
+
 trap cleanup EXIT
 
 test_local_patch_release
@@ -1241,6 +1544,15 @@ test_subshell_error_reaches_json
 test_prerelease_push_failure_warns
 test_stalled_fetch_stops_cycle
 test_local_cycle_resume
+test_checks_pass_then_merge
+test_checks_fail_stops_merge
+test_checks_none_reported
+test_checks_timeout
+test_checks_read_error_stops_merge
+test_skip_checks
+test_red_dev_blocks_bump
+test_no_pr_waits_for_dev_runs
+test_no_pr_without_gh
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
