@@ -556,6 +556,7 @@ STANZA_ERROR_LOG=$(mktemp "${TMPDIR:-/tmp}/stanza-error.XXXXXX" 2>/dev/null) || 
 trap on_release_exit EXIT
 
 # Parse command line arguments
+scan_json_flag "$@"
 while [[ $# -gt 0 ]]; do
     case $1 in
         patch|minor|major|pre|prerelease)

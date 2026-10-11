@@ -207,6 +207,20 @@ jq -e '.ok == false and .status == "drifted"' "$T/stdout" > /dev/null \
     && pass || fail "rules-check drifted: expected ok=false and the status: $(cat "$T/stdout")"
 cleanup
 
+# --json after the option that fails still gets the failure document: the
+# option loop stops at the bad option and never reaches --json itself
+for case in "release|setup_alpha|release patch --local -y" "init|setup_init|init -y" "rules|setup_stable|rules install"; do
+    IFS='|' read -r command setup args <<< "$case"
+    echo "$command usage error, --json last"
+    "$setup"
+    # shellcheck disable=SC2086  # args is a word list
+    HOME="$T/home" PATH="$T/bin:$PATH" "$STANZA" $args --no-such-option --json \
+        > "$T/stdout" 2> /dev/null < /dev/null || true
+    jq -s -e --arg c "$command" 'length == 1 and .[0].command == $c and .[0].ok == false' "$T/stdout" > /dev/null \
+        && pass || fail "$command usage error, --json last: $(cat "$T/stdout")"
+    cleanup
+done
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]] || exit 1

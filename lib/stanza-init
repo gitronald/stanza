@@ -18,6 +18,7 @@ YES_TO_ALL=false
 INIT_TYPE=""
 
 # Parse command line arguments
+scan_json_flag "$@"
 while [[ $# -gt 0 ]]; do
     case $1 in
         -n|--name)

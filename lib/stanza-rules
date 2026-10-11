@@ -49,6 +49,7 @@ esac
 json_failure_trap rules "$RULES_ACTION"
 
 # Parse command line arguments
+scan_json_flag "$@"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --local)

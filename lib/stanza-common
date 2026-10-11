@@ -31,6 +31,20 @@ QUIET_REQUESTED="${QUIET_REQUESTED:-false}"
 VERBOSE_REQUESTED="${VERBOSE_REQUESTED:-false}"
 VERBOSE="${VERBOSE:-false}"
 
+# Set JSON_OUTPUT when --json is anywhere in a command's arguments. Called
+# before the option loop, which stops at the first unknown option: a usage
+# error then still gets its JSON failure document when --json comes after it.
+# Usage: scan_json_flag "$@"
+scan_json_flag() {
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "--json" ]]; then
+            JSON_OUTPUT=true
+        fi
+    done
+    return 0
+}
+
 # Validate that --quiet and --verbose were not both requested at any level.
 # Call after subcommand argument parsing.
 check_verbosity_exclusion() {
