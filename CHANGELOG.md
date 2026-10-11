@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-10
+
 ### Changed
 
 - `install.sh` and `uninstall.sh` print in the same row grammar as
