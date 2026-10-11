@@ -192,7 +192,7 @@ These flags can be passed before the subcommand (or, for back-compat, after):
 |------|--------|
 | `-q`, `--quiet` | Reduce output to a single line: the new version (release), repo URL (init). Errors still print. |
 | `-v`, `--verbose` | Show step internals (pre-checks, remote-skip context). Stack as `-vv` to dump every git/gh command. |
-| `--json` | Emit a single JSON document on stdout (`schema_version: 1`). Suppresses the human banner; errors still go to stderr. |
+| `--json` | Emit a single JSON document on stdout (`schema_version: 1`), with `ok` saying whether the run succeeded. A failed run still prints one, with `ok: false` and the `error` and `hint`. Suppresses the human banner; errors still go to stderr. |
 | `--no-color` | Disable ANSI color. Also honored: the `NO_COLOR` env var. |
 
 `--quiet` and `--verbose` are mutually exclusive. `--json` takes over stdout regardless of verbosity.

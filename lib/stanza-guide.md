@@ -197,13 +197,19 @@ failure:
 ```
 
 - `ok` is `true` on success and `false` on failure.
-- `failed_step` is `"preflight"` when the run stopped before its first step.
+- `failed_step` is `"preflight"` when the run stopped before its first step,
+  including on a usage error such as an unknown option.
 - `completed_steps` lists the steps this run finished, in order.
 - `resume` is `null` when the error gave its own hints, which are then in
   `hint`.
 - On success, `resumed` is `true` when the run resumed an earlier one. A
   resumed bump reports `from_version` as `null`, since the run did not see the
   version before the bump.
+
+`stanza init` and `stanza rules` follow the same rule: their documents carry
+`ok`, and a failure prints `{"command":...,"ok":false,"error":...,"hint":...}`
+(with `action` for `rules`). `stanza rules check` reports a drifted or missing
+rule with `ok: false` in its own document and exits 1.
 
 Git calls that reach the remote give up after `STANZA_NET_STALL_SECONDS`
 (default 30) below 1000 bytes/s, instead of waiting on a stalled connection.
