@@ -1,7 +1,7 @@
 ---
 id: 5
 slug: ci-output-contract
-status: active
+status: implemented
 branch: feature/ci-output-contract
 created: 2026-10-09T18:49:08-07:00
 concluded:
@@ -172,6 +172,7 @@ on whatever bash that machine has (5.x here). Two gaps follow.
     usage line back on stdout (5), no release trap (48), and no prescan (3).
   - Delta review (correctness, low): one finding, the `--json`-last case,
     fixed as above.
+- **2026-10-11T04:47:06-07:00** — Implemented: 19 commits ahead of `dev`.
 ## Handoff
 
 - **State.** All work is committed and pushed on
