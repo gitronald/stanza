@@ -1,7 +1,7 @@
 ---
 id: 4
 slug: release-preflight
-status: active
+status: implemented
 branch: feature/release-preflight
 created: 2026-10-09T18:49:08-07:00
 concluded:
@@ -128,3 +128,4 @@ step boundaries in `lib/stanza-release`.
     branch that cannot fast-forward to `origin/<base>` still fails at the
     merge step, after the bump is pushed. Catching it in preflight needs a
     fetch of the base branch.
+- **2026-10-10T23:45:38-07:00** — Implemented: 5 commits ahead of `dev`.
