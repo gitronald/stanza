@@ -157,6 +157,16 @@ step boundaries in `lib/stanza-release`.
   - **Checks.** All suites pass: release-workflow 499, install 116, latex 38,
     network 34, output-modes 50, release-asset 27, rules 115, version-bumps
     16, version-file-detection 101. bash 3.2 and shellcheck still not run.
+- **2026-10-11T00:21:33-07:00** — Follow-up fixed on `dev` after close
+  (commit `2e0ba55`). Plan 002 gave the diverged-base failure its recovery
+  hint; this moves the detection into preflight. With `--no-pr` (full and
+  merge), `preflight_base_fast_forward` fetches the base branch and refuses
+  when the local one has diverged from origin's, before the bump is pushed. A
+  local base ahead of origin's passes, since the `--ff-only` pull is a no-op
+  then. `test_no_pr_diverged_base_hint` became
+  `test_no_pr_diverged_base_refused` (full and merge refused with refs
+  unchanged; base ahead passes `--check`); its 6 new assertions fail on the
+  pre-fix code. All suites pass (release-workflow 514).
 
 ## Retrospective
 
