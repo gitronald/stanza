@@ -666,9 +666,14 @@ has_remote() {
     return $?
 }
 
+# Succeed when tracked files differ from HEAD.
+has_uncommitted_changes() {
+    ! git diff-index --quiet HEAD --
+}
+
 # Check for uncommitted changes
 check_uncommitted_changes() {
-    if ! git diff-index --quiet HEAD --; then
+    if has_uncommitted_changes; then
         print_error "Uncommitted changes, commit or stash them first."
         git status --porcelain >&2
         exit 1

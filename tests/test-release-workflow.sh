@@ -1778,6 +1778,70 @@ test_preflight_base_missing() {
     teardown_remote_repo
 }
 
+# Review follow-ups: checks that depend on the branch, and the tags they read.
+test_preflight_review_followups() {
+    echo ""
+    echo "Preflight skips dev's checks off dev, and reads tags of the project's form"
+    local out code
+
+    # No local dev: the branch failure is reported, not a raw git error.
+    setup_remote_repo
+    git checkout -q main
+    git branch -q -D dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "no local dev: exits 1" "1" "$code"
+    assert_contains "no local dev: reports the branch" "$out" "should be performed on dev"
+    assert_not_contains "no local dev: no raw git error" "$out" "fatal:"
+    teardown_remote_repo
+
+    # Off dev, a red dev is not read or reported.
+    setup_remote_repo
+    printf 'completed\tfailure\ttests\n' > "$GH_MOCK_STATE/runs.1"
+    git checkout -q -b feature
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "off dev: exits 1" "1" "$code"
+    assert_not_contains "off dev: dev's CI not reported" "$out" "CI failed on dev"
+    assert_eq "off dev: dev's CI not read" "" "$(cat "$GH_MOCK_STATE/runs_commits" 2>/dev/null)"
+    teardown_remote_repo
+
+    # A floating major tag does not count as a semver release.
+    setup_remote_repo
+    git tag v1 main
+    git push -q origin v1
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch --check 2>&1) || code=$?
+    assert_eq "floating v1 tag: check passes" "0" "$code"
+    assert_contains "floating v1 tag: target unchanged" "$out" "would release 0.1.0a0 -> v0.1.0"
+    teardown_remote_repo
+
+    # A prerelease is ordered against origin's tags too.
+    setup_remote_repo
+    git tag v0.1.0 main
+    git push -q origin v0.1.0
+    git tag -d v0.1.0 >/dev/null
+    preflight_snapshot
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release prerelease -y 2>&1) || code=$?
+    assert_eq "prerelease below an origin-only tag: exits 1" "1" "$code"
+    assert_contains "prerelease below an origin-only tag: named" "$out" "v0.1.0a1 is lower than the latest tag v0.1.0"
+    preflight_unchanged "prerelease, origin-only tag"
+    teardown_remote_repo
+
+    # merge --check reports a resume without fetching the tag it lacks.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --no-dev-cycle >/dev/null 2>&1
+    git checkout -q dev
+    git tag -d v0.1.0 >/dev/null
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge --check 2>&1) || code=$?
+    assert_eq "merge --check resume: exits 0" "0" "$code"
+    assert_contains "merge --check resume: says so" "$out" "would resume v0.1.0"
+    assert_eq "merge --check resume: tag not fetched" "" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+}
+
 test_release_check() {
     echo ""
     echo "--check runs preflight only"
@@ -1864,6 +1928,7 @@ test_preflight_gh_auth
 test_preflight_reports_all
 test_preflight_version_order
 test_preflight_base_missing
+test_preflight_review_followups
 test_release_check
 
 echo ""

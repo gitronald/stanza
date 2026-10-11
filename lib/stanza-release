@@ -1377,7 +1377,8 @@ find_shipped_release() {
     fi
     if [[ -z "$local_sha" ]]; then
         # A failed fetch must not resume a release whose tag this clone lacks.
-        if ! out=$(git_net fetch origin "refs/tags/$tag:refs/tags/$tag" 2>&1); then
+        # --check reports the resume and leaves the fetch to the real run.
+        if [[ "$CHECK_ONLY" != "true" ]] && ! out=$(git_net fetch origin "refs/tags/$tag:refs/tags/$tag" 2>&1); then
             preflight_fail "git fetch origin refs/tags/$tag:refs/tags/$tag failed" "" "$out"
             return 1
         fi
@@ -1501,13 +1502,17 @@ version_lt() {
 }
 
 # Print the highest version tag among tag names on stdin, one per line; a tag
-# counts when it is v followed by a version. Prints nothing when none does.
+# counts when it is v followed by a version of the project's form: LaTeX for
+# <project_type> latex, semver otherwise, so a floating major tag (v1) or a
+# date tag does not count in a semver project. Prints nothing when none does.
+# Usage: latest_version_tag <project_type>
 latest_version_tag() {
-    local tag best=""
+    local tag best="" valid=is_valid_version_string
+    [[ "$1" == "latex" ]] && valid=is_valid_latex_version_string
     while IFS= read -r tag; do
         [[ "$tag" == v* ]] || continue
         tag="${tag#v}"
-        is_valid_version_string "$tag" || is_valid_latex_version_string "$tag" || continue
+        "$valid" "$tag" || continue
         if [[ -z "$best" ]] || version_lt "$best" "$tag"; then
             best="$tag"
         fi
@@ -1540,7 +1545,7 @@ preflight_branch_level() {
 
 # Read the base branch and the version tags on origin in one call into
 # REMOTE_TAGS (tag names, one per line). Records a failure when origin cannot
-# be read or has no base branch.
+# be read, or, for a release that merges into it, has no base branch.
 REMOTE_TAGS=""
 preflight_remote_refs() {
     local out
@@ -1550,6 +1555,7 @@ preflight_remote_refs() {
         return 0
     fi
     REMOTE_TAGS=$(printf '%s\n' "$out" | awk '$2 ~ /^refs\/tags\// && $2 !~ /\^\{\}$/ { sub(/^refs\/tags\//, "", $2); print $2 }')
+    [[ "$BUMP_TYPE" == "prerelease" ]] && return 0
     if ! printf '%s\n' "$out" | awk -v ref="refs/heads/$BASE_BRANCH" '$2 == ref { found = 1 } END { exit !found }'; then
         preflight_fail "origin has no $BASE_BRANCH branch to release into" \
             "push it first: git push -u origin $BASE_BRANCH"
@@ -1622,7 +1628,7 @@ release_preflight() {
             "current branch is ${CURRENT_BRANCH:-a detached HEAD}: git checkout dev"
         on_branch=false
     fi
-    if ! git diff-index --quiet HEAD --; then
+    if has_uncommitted_changes; then
         preflight_fail "Uncommitted changes, commit or stash them first." "" "$(git status --porcelain)"
     fi
 
@@ -1687,7 +1693,7 @@ release_preflight() {
             preflight_fail "CHANGELOG.md [Unreleased] is empty; add entries before releasing" \
                 "fill ## [Unreleased], or pass --no-changelog to skip changelog promotion"
         fi
-        if [[ "$gh_ok" == "true" ]]; then
+        if [[ "$on_branch" == "true" && "$gh_ok" == "true" ]]; then
             check_dev_ci_before_bump
         fi
     fi
@@ -1706,27 +1712,26 @@ release_preflight() {
     fi
 
     # The tag: free in this clone and on origin, and above the latest version
-    # tag. A prerelease is not tagged, but must still sort above the last one.
+    # tag in either. A prerelease is not tagged, but must still sort above the
+    # last one.
     if [[ -n "$tag" ]]; then
         tags=$(git tag -l 'v*')
-        if [[ "$BUMP_TYPE" != "prerelease" ]]; then
-            where=""
-            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-                where="in this clone"
-            fi
-            if ! should_skip_remote; then
-                preflight_remote_refs
-                tags="$tags"$'\n'"$REMOTE_TAGS"
-                if printf '%s\n' "$REMOTE_TAGS" | grep -qxF "$tag"; then
-                    where="${where:+$where and }on origin"
-                fi
-            fi
-            if [[ -n "$where" ]]; then
-                preflight_fail "tag $tag already exists $where" \
-                    "inspect it (git show $tag); release a higher version, or delete the tag if it is stale"
+        where=""
+        if printf '%s\n' "$tags" | grep -qxF "$tag"; then
+            where="in this clone"
+        fi
+        if ! should_skip_remote; then
+            preflight_remote_refs
+            tags="$tags"$'\n'"$REMOTE_TAGS"
+            if printf '%s\n' "$REMOTE_TAGS" | grep -qxF "$tag"; then
+                where="${where:+$where and }on origin"
             fi
         fi
-        latest=$(printf '%s\n' "$tags" | latest_version_tag)
+        if [[ "$BUMP_TYPE" != "prerelease" && -n "$where" ]]; then
+            preflight_fail "tag $tag already exists $where" \
+                "inspect it (git show $tag); release a higher version, or delete the tag if it is stale"
+        fi
+        latest=$(printf '%s\n' "$tags" | latest_version_tag "$PROJECT_TYPE_DETECTED")
         if [[ -n "$latest" ]] && version_lt "$RELEASE_TARGET" "${latest#v}"; then
             preflight_fail "$tag is lower than the latest tag $latest" \
                 "set dev's version above ${latest#v} first"
