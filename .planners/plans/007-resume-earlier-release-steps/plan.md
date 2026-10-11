@@ -1,7 +1,7 @@
 ---
 id: 7
 slug: resume-earlier-release-steps
-status: active
+status: implemented
 branch: feature/resume-earlier-release-steps
 created: 2026-10-09T23:02:03-07:00
 concluded:
@@ -106,6 +106,7 @@ then `release pr` re-run; a `--local --no-dev-cycle` release, then a remote
   - Cost: every remote `release merge` preflight now does one extra
     `git fetch origin <base>` (to look for a merge that has no tag).
   - Docs (`e4e06d1`): help text, README, guide, CHANGELOG `[Unreleased]`.
+- **2026-10-11T00:39:58-07:00** — Implemented: 6 commits ahead of `dev`.
 
 ## Handoff
 
