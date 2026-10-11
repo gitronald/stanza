@@ -922,9 +922,10 @@ gh_get_last_open_pr_number() {
 #
 # A release merge waits for CI on what it ships: the release PR's checks, or
 # under --no-pr the workflow runs on dev's head commit. A failed or cancelled
-# check stops the release before anything is merged or tagged. No checks at all
-# is a pass, once STANZA_CHECKS_GRACE_SECONDS (default 15) has passed without
-# any registering. STANZA_CHECKS_TIMEOUT (default 1800; 0 = no limit) bounds
+# check stops the release before anything is merged or tagged; on a commit,
+# only the newest run of each workflow counts. Nothing is a pass before
+# STANZA_CHECKS_GRACE_SECONDS (default 15) has passed, so a slow workflow can
+# register; no checks at all is then a pass. STANZA_CHECKS_TIMEOUT (default 1800; 0 = no limit) bounds
 # the wait; STANZA_CHECKS_INTERVAL (default 10) is the poll interval.
 # --skip-checks bypasses all of it.
 
@@ -969,18 +970,29 @@ read_ci() {
         return 1
     fi
     [[ -n "$out" ]] || return 2
-    local line bucket name run_status conclusion
+    # Fields are split by expansion, not `IFS=$'\t' read`: tab is IFS
+    # whitespace, so read collapses an empty field (an unfinished run's
+    # conclusion) and shifts the name into it.
+    local line bucket name run_status conclusion rest seen=$'\n'
     while IFS= read -r line; do
         [[ -n "$line" ]] || continue
         if [[ "$kind" == "pr" ]]; then
-            IFS=$'\t' read -r bucket name <<< "$line"
+            bucket="${line%%$'\t'*}"
+            name="${line#*$'\t'}"
             case "$bucket" in
                 pass|skipping) bucket=pass ;;
                 fail|cancel)   bucket=fail ;;
                 *)             bucket=pending ;;
             esac
         else
-            IFS=$'\t' read -r run_status conclusion name <<< "$line"
+            run_status="${line%%$'\t'*}"
+            rest="${line#*$'\t'}"
+            conclusion="${rest%%$'\t'*}"
+            name="${rest#*$'\t'}"
+            # gh lists runs newest first; a re-run or a run cancelled by a
+            # newer one is superseded by that run, so keep one per workflow.
+            [[ "$seen" == *$'\n'"$name"$'\n'* ]] && continue
+            seen="$seen$name"$'\n'
             if [[ "$run_status" != "completed" ]]; then
                 bucket=pending
             else
@@ -997,7 +1009,15 @@ read_ci() {
 # The names of the CI_LINES checks in one bucket, comma-separated.
 # Usage: ci_names fail
 ci_names() {
-    printf '%s' "$CI_LINES" | awk -F'\t' -v b="$1" '$1 == b { printf "%s%s", sep, $2; sep = ", " }'
+    printf '%s' "$CI_LINES" | awk -F'\t' -v b="$1" \
+        '$1 == b { printf "%s%s", sep, ($2 == "" ? "(unnamed)" : $2); sep = ", " }'
+}
+
+# The number of CI_LINES checks in one bucket. Decisions use the count, not
+# ci_names, so a check without a name still counts.
+# Usage: ci_count pending
+ci_count() {
+    printf '%s' "$CI_LINES" | awk -F'\t' -v b="$1" '$1 == b { n++ } END { print n + 0 }'
 }
 
 # Wait for the checks of a PR or the runs on a commit to finish. Sets
@@ -1013,7 +1033,7 @@ wait_for_ci() {
     grace=$(checks_seconds STANZA_CHECKS_GRACE_SECONDS 15)
     interval=$(checks_seconds STANZA_CHECKS_INTERVAL 10)
     settle=$(( interval < 3 ? interval : 3 ))
-    local start=$SECONDS waited=false status elapsed failed pending total
+    local start=$SECONDS waited=false status elapsed pending total
     while true; do
         status=0
         read_ci "$kind" "$ref" || status=$?
@@ -1031,15 +1051,20 @@ wait_for_ci() {
             sleep "$settle"
             continue
         fi
-        failed=$(ci_names fail)
-        pending=$(ci_names pending)
-        total=$(printf '%s' "$CI_LINES" | grep -c .)
-        if [[ -n "$failed" ]]; then
+        if [[ $(ci_count fail) -gt 0 ]]; then
             CHECKS_STOP=failed
-            print_error "$what has failing checks: $failed"
+            print_error "$what has failing checks: $(ci_names fail)"
             return 1
         fi
-        if [[ -z "$pending" ]]; then
+        pending=$(ci_names pending)
+        if [[ $(ci_count pending) -eq 0 ]]; then
+            # A slower workflow may not have registered yet; give it the
+            # same grace as a PR with no checks before calling this a pass.
+            if [[ $elapsed -lt $grace ]]; then
+                sleep "$settle"
+                continue
+            fi
+            total=$(ci_count pass)
             CHECKS_RESULT=passed
             if [[ "$waited" == "true" ]]; then
                 print_row checks "$total passed after ${elapsed}s"
@@ -1079,18 +1104,15 @@ check_dev_ci_before_bump() {
     sha=$(git rev-parse dev)
     read_ci commit "$sha" || status=$?
     if [[ $status -eq 1 ]]; then
-        if release_uses_pr; then
-            print_error "could not read the CI runs on dev (${sha:0:7})"
-            print_output "$CI_READ_ERROR"
-            exit 1
-        fi
+        # Early warning only: the merge gate is the check that stops a release,
+        # so a token that cannot read Actions runs does not block the bump.
         print_warning "could not read the CI runs on dev (${sha:0:7}); not checked"
         return 0
     fi
     [[ $status -eq 0 ]] || { print_row_v checks "dev (${sha:0:7}): no runs reported"; return 0; }
     local failed
-    failed=$(ci_names fail)
-    if [[ -n "$failed" ]]; then
+    if [[ $(ci_count fail) -gt 0 ]]; then
+        failed=$(ci_names fail)
         local yes=""
         [[ "$YES_TO_ALL" == "true" ]] && yes=" -y"
         print_error "CI failed on dev's head (${sha:0:7}): $failed; not bumping" \

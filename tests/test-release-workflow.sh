@@ -1494,6 +1494,66 @@ test_no_pr_waits_for_dev_runs() {
     teardown_remote_repo
 }
 
+test_ci_edge_cases() {
+    echo ""
+    echo "Unfinished runs, unnamed checks, late checks, superseded and unreadable runs"
+    local out code
+
+    # An unfinished run's empty conclusion is a field, not a gap: the gate waits.
+    setup_remote_repo
+    printf 'completed\tsuccess\tCI\n' > "$GH_MOCK_STATE/runs.1"
+    printf 'in_progress\t\tCI\n' > "$GH_MOCK_STATE/runs.2"
+    printf 'completed\tsuccess\tCI\n' > "$GH_MOCK_STATE/runs.3"
+    out=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1)
+    assert_contains "--no-pr: waits on the in-progress run" "$out" "checks  waiting on CI"
+    assert_eq "--no-pr: read until the run finished" "3" "$(cat "$GH_MOCK_STATE/runs.calls")"
+    teardown_remote_repo
+
+    # A pending check without a name still counts as pending.
+    setup_remote_repo
+    printf 'pending\t\n' > "$GH_MOCK_STATE/checks.1"
+    printf 'pass\t\n' > "$GH_MOCK_STATE/checks.2"
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1)
+    assert_contains "unnamed pending check is waited on" "$out" "checks  waiting on (unnamed)"
+    assert_eq "unnamed: checks polled twice" "2" "$(cat "$GH_MOCK_STATE/checks.calls")"
+    teardown_remote_repo
+
+    # A check that registers within the grace period after a pass is not missed.
+    setup_remote_repo
+    printf 'pass\tlint\n' > "$GH_MOCK_STATE/checks.1"
+    printf 'pass\tlint\nfail\ttest\n' > "$GH_MOCK_STATE/checks.2"
+    code=0
+    out=$(STANZA_CHECKS_GRACE_SECONDS=2 STANZA_CHECKS_INTERVAL=1 NO_COLOR=1 \
+        "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "late failing check: exits 1" "1" "$code"
+    assert_contains "late failing check: named" "$out" "PR #1 has failing checks: test"
+    assert_eq "late failing check: no tag" "" "$(git tag)"
+    teardown_remote_repo
+
+    # Only the newest run of each workflow counts; gh lists runs newest first.
+    setup_remote_repo
+    printf 'completed\tsuccess\tCI\ncompleted\tfailure\tCI\n' > "$GH_MOCK_STATE/runs.1"
+    code=0
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1 || code=$?
+    assert_eq "superseded failed run does not block the bump" "0" "$code"
+    assert_eq "superseded: bumped" "0.1.0" "$(cat VERSION)"
+    teardown_remote_repo
+
+    # Unreadable runs on dev warn before the bump; the PR's checks gate the merge.
+    setup_remote_repo
+    cat > "$TEST_TMPDIR/bin/gh-real" < "$TEST_TMPDIR/bin/gh"
+    chmod +x "$TEST_TMPDIR/bin/gh-real"
+    printf '#!/bin/bash\n[[ "$1 $2" == "run list" ]] && { echo "HTTP 403" >&2; exit 1; }\nexec "%s" "$@"\n' \
+        "$TEST_TMPDIR/bin/gh-real" > "$TEST_TMPDIR/bin/gh"
+    printf 'pass\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "unreadable dev runs: release succeeds" "0" "$code"
+    assert_contains "unreadable dev runs: warns" "$out" "could not read the CI runs on dev"
+    assert_eq "unreadable dev runs: tag created" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+}
+
 test_no_pr_without_gh() {
     echo ""
     echo "--no-pr without gh releases and says the runs were not read"
@@ -1552,6 +1612,7 @@ test_checks_read_error_stops_merge
 test_skip_checks
 test_red_dev_blocks_bump
 test_no_pr_waits_for_dev_runs
+test_ci_edge_cases
 test_no_pr_without_gh
 
 echo ""
