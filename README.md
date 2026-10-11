@@ -225,6 +225,8 @@ When a release stops partway, it prints the error git or gh gave, a row naming t
 
 `stanza release merge` resumes a release that is already merged and tagged, and is a no-op once the dev cycle is done. With `--json`, a failed run emits `"ok": false` with `failed_step`, `completed_steps`, `error`, `resume`, and `hint` (which holds the recovery text when `resume` is `null`). `stanza guide` documents the fields.
 
+Before it changes anything, a release checks what its phase needs: the branch, a clean tree, `dev` level with origin, `gh` authentication, the target tag free in this clone and on origin and above the latest version tag, and for `release merge` the open PR. It reports every failed check in one run (in `--json`, as an `errors` list), and `--check` runs only these checks.
+
 The merge waits for CI: the release PR's checks, or with `--no-pr` the workflow runs on `dev`'s head. A failed or cancelled check stops the release before the merge, with the PR left open; fix it on `dev`, push, and run `stanza release merge`. A repository with no checks releases as before. A release also refuses to bump a `dev` whose head already failed CI. `STANZA_CHECKS_TIMEOUT` (seconds, default 1800; `0` for no limit) bounds the wait, and `--skip-checks` bypasses it.
 
 Git calls that reach the remote give up when a transfer stays below 1000 bytes/s for `STANZA_NET_STALL_SECONDS` (default 30). Raise it for a remote that can stay silent longer while it works (a slow server-side hook); set it to `0` to turn this off. Your own `http.lowSpeed*` git config wins.
@@ -249,6 +251,7 @@ Options:
       --pr-note <TEXT>     Append a note to the PR body (full and pr phases)
       --no-pr              Merge dev into the base branch without a PR (full and merge phases)
       --skip-checks        Merge without waiting for CI, and bump a dev whose CI failed
+      --check              Run the preflight checks only and change nothing
       --no-dev-cycle  Skip the post-release dev cycle (full and merge phases)
       --no-changelog       Skip CHANGELOG [Unreleased] promotion and its check
   -y, --yes                Auto-confirm all prompts (useful for CI/CD)
@@ -269,6 +272,7 @@ Examples:
   stanza release merge -y             # Phase 2: merge the open PR, tag, new cycle
   stanza release pr patch --pr-note "fixes #42"   # Open PR with a note in its body
   stanza release patch -y --no-dev-cycle     # Release, but leave dev untouched
+  stanza release patch --check        # Check the release could run; change nothing
   stanza -v release patch             # Show detailed git output
   stanza -q release prerelease -y     # Print just the new version
   stanza --json release patch -y      # Machine-readable JSON output
