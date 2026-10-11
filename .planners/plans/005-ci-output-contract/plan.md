@@ -1,7 +1,7 @@
 ---
 id: 5
 slug: ci-output-contract
-status: active
+status: implemented
 branch: feature/ci-output-contract
 created: 2026-10-09T18:49:08-07:00
 concluded:
@@ -127,6 +127,7 @@ on whatever bash that machine has (5.x here). Two gaps follow.
     `test-version-bumps.sh` and `test-version-file-detection.sh` relied on a
     global git identity, and `test-rules.sh` expected the unresolved temp
     path where git reports the physical one (`/var` -> `/private/var`).
+- **2026-10-11T02:23:07-07:00** — Implemented: 9 commits ahead of `dev`.
 
 ## Handoff
 
