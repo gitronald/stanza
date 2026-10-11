@@ -94,3 +94,37 @@ pointed at a commit with a failing test. The same failure had already shown on
   - Worktree: `.worktrees/release-waits-for-checks`
   - PR: pending
 - **2026-10-10T20:25:17-07:00** — PR opened: https://github.com/gitronald/stanza/pull/15
+- **2026-10-10T20:26:00-07:00** — Implemented the CI gate (`1f436eb`) and its docs (`7439879`).
+  - The gate is a new release step, `checks`, between `pr` and `merge`, so a
+    failure names it in the failed row and in `--json` (`failed_step`,
+    `completed_steps`). The JSON success document gains `checks`: `passed`,
+    `none`, `skipped`, `unavailable`, or `null`.
+  - **Deviation: a poll loop, not `gh pr checks --watch --fail-fast`.**
+    `--watch` has no timeout and cannot wait out a grace period for checks that
+    have not registered yet. stanza polls `gh pr checks --json bucket,name`
+    instead (`STANZA_CHECKS_INTERVAL`, default 10s), treats `pass`/`skipping`
+    as passing and `fail`/`cancel` as failing, and stops at the first failure.
+    Checked against GitHub with gh 2.102.0: a PR with no checks makes
+    `gh pr checks` exit 1 with `no checks reported on the '<branch>' branch`,
+    which stanza reads as "none". The grace period is
+    `STANZA_CHECKS_GRACE_SECONDS` (default 15). Both knobs exist so the tests
+    can set them to 0. The guide does not document them.
+  - **Deviation: the resume hint is `stanza release merge`, not `release pr`.**
+    `release pr <type>` on a `dev` that is already on the stable version
+    would bump it a second time (0.1.0 -> 0.1.1). A fix pushed to `dev` moves
+    the open PR's head with it, so `release merge` resumes cleanly. A test
+    covers fail -> fix on dev -> `release merge`.
+  - `--no-pr` stays usable without `gh` (it never required it): the gate is
+    best-effort there, and prints `checks  not read` when `gh` is missing or
+    unauthenticated, or warns when `gh run list` cannot read the remote. On
+    the PR path, a read error stops the release.
+  - The pre-bump check refuses only on runs that concluded as failed
+    (`failure`, `cancelled`, `timed_out`, `startup_failure`). It does not wait
+    on in-progress runs, because the merge gate waits on the release commit
+    itself. A refusal is `preflight` in JSON.
+  - Tests: nine new cases in `tests/test-release-workflow.sh` over a gh mock
+    whose `pr checks` / `run list` answers are scripted per call. All suites
+    pass (release-workflow 348/348; install, latex, network, output-modes,
+    release-asset, rules, version-bumps, and version-file-detection all green).
+  - Not verified: a live release against a repository with real GitHub
+    Actions checks. Only the "no checks reported" behavior was observed live.
