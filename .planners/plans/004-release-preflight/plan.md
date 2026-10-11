@@ -73,3 +73,58 @@ step boundaries in `lib/stanza-release`.
   - Worktree: `.worktrees/release-preflight`
   - PR: pending
 - **2026-10-10T23:45:06-07:00** — PR opened: https://github.com/gitronald/stanza/pull/17
+- **2026-10-10T23:46:00-07:00** — Implemented (commits `4a38288`, `b5295c0`).
+  - **Changes 1-4.** `release_preflight` in `lib/stanza-release` runs before
+    the first commit, push, merge, or tag of every phase. It records each
+    failure with `preflight_fail` (error, hints, command output) and
+    `preflight_report` prints them all, then exits 1. Checks whose input an
+    earlier failure leaves unknown are skipped: off `dev`, the version and
+    everything derived from it (tag, resume, PR title); without gh auth, the
+    PR and the pre-bump CI read.
+  - **Change 2.** The target comes from `bump_version_string` /
+    `bump_latex_version_string` (pure). The tag is checked in this clone and
+    on origin, and ordered against the latest `v<version>` tag from both, by a
+    new `version_lt` (alpha below its release, missing LaTeX components as 0).
+    One `ls-remote origin refs/heads/<base> 'refs/tags/v*'` call reads both
+    the base branch (change 3) and the remote tags.
+  - **Change 3.** The merge-phase PR guards (count, open, base, head, title)
+    moved from `gh_merge_pr` and the merge case into `preflight_merge_pr`.
+    `gh_merge_pr` now merges with `--match-head-commit` set to local `dev`'s
+    head rather than the PR head it read, so the full flow keeps the race
+    guard without a second lookup.
+  - **Change 4, deviation.** The plan's JSON shape
+    (`{"ok":false,"phase":"preflight","errors":[...]}`) predates plan 003's
+    failure document, where `phase` is the release phase and the stopped
+    step is `failed_step`. The preflight failure keeps that document
+    (`failed_step: "preflight"`, `error`/`hint` from the first failure) and
+    adds `errors: [{error, hint}]`.
+  - **Change 5, decided: built.** `--check` runs the preflight only and exits
+    0/1; the success row and JSON (`"check":true`, `to_version`, `tag`, and
+    for merge `resumed`, `pr`) say what the run would do.
+  - **Merge resume.** `find_shipped_release` runs inside preflight; its exits
+    (unreadable or conflicting remote tag, failed tag fetch) became recorded
+    failures. A resumed merge skips the tag and PR checks.
+  - **Stale premise.** The `gh auth` check already ran before the bump
+    commit; it moved into preflight unchanged in effect.
+  - **Prerelease ordering (addition).** A prerelease that would sort below the
+    latest tag (dev on `0.1.0a3` after `v0.1.0`) is refused; the plan's
+    ordering check did not exclude prereleases.
+  - **Removed.** `require_branch`, `check_not_protected_branch`, and
+    `check_branch_up_to_date` in `lib/stanza-common` had no callers left;
+    `check_changelog_before_release` folded into preflight.
+  - **Tests.** `test-release-workflow.sh`: existing tag (local and
+    origin-only, full and pr) refused with dev, main, and origin refs
+    unchanged and no PR opened; gh auth failure refused before the bump;
+    three failures in one run (human and `errors` length 3); below-latest
+    (local, origin-only, prerelease); missing base on origin; `--check` pass
+    and fail, and `merge --check` leaving the PR open; `version_lt` cases.
+    The direct `gh_merge_pr` call with no `dev` became a `release merge`
+    run. All suites pass: release-workflow 481, install 116, latex 38,
+    network 34, output-modes 50, release-asset 27, rules 115, version-bumps
+    16, version-file-detection 101.
+  - **Not verified.** bash 3.2 (no local bash 3.2; plan 005's CI job would
+    cover it). shellcheck is not installed here, so it was not run.
+  - **Not covered (follow-up candidate).** Under `--no-pr`, a local base
+    branch that cannot fast-forward to `origin/<base>` still fails at the
+    merge step, after the bump is pushed. Catching it in preflight needs a
+    fetch of the base branch.
