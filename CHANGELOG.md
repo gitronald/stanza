@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `stanza release --check` runs the release's preflight checks and changes
+  nothing: exit 0 when the release could go ahead, 1 with every failure when
+  it could not.
+
+### Changed
+
+- A release checks everything its phase needs before its first commit, push,
+  merge, or tag, and reports every failed check in one run. New checks catch
+  what used to stop a release halfway: a target tag that already exists in
+  this clone or on origin (which left the base branch merged and untagged), a
+  target below the latest version tag, and a missing base branch on origin.
+  With `--json`, the failure document lists every failure in `errors`.
+
 ### Fixed
 
 - A failed read of the release's checks no longer stops the release at once.

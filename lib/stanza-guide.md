@@ -111,6 +111,43 @@ With `--json`, the success document carries `"checks"`: `"passed"`, `"none"`,
 `"skipped"`, `"unavailable"` (`--no-pr` without a readable CI), or `null`
 (`--local`, or a resumed release).
 
+## Preflight: checked before anything changes
+
+Before a release commits, pushes, merges, or tags anything, it checks
+everything the phase needs, and reports every failure in one run:
+
+- the branch (`dev`, or not `main`/`master` for a prerelease) and a clean tree;
+- `dev` level with `origin/dev` (for `release merge`, only with `--no-pr`);
+- `gh auth status`, on the PR path;
+- an empty `## [Unreleased]`, and a `dev` whose CI already failed (full and
+  `pr`);
+- the target tag: free in this clone and on origin, and above the latest
+  version tag (a prerelease must also sort above it);
+- `origin` has the base branch;
+- for `release merge`: the PR is open, targets the base branch, its head is
+  local `dev`, and its title is the tag. Without `--no-pr`, an alpha version
+  is refused.
+
+```
+[ERROR] Uncommitted changes, commit or stash them first.
+     M NOTES
+[ERROR] tag v0.1.0 already exists in this clone
+  hint    inspect it (git show v0.1.0); release a higher version, or delete the tag if it is stale
+```
+
+With `--json`, the failure document has `"failed_step":"preflight"`, `error`
+and `hint` from the first failure, and `errors`, a list of
+`{"error":...,"hint":...}` for every failure.
+
+`--check` runs the preflight only and changes nothing: exit 0 when the release
+could go ahead, 1 with the failures when it could not. The success row (and
+the JSON's `"check":true`, `to_version`, and `tag`) says what the run would do:
+
+```bash
+stanza release patch --check         # check a full patch release
+stanza release merge --check         # check the open release PR can merge
+```
+
 ## When a release stops partway
 
 A failed step prints the error that git or gh gave, then a row naming the step
@@ -203,6 +240,7 @@ stanza release prerelease -y         # bump to the next alpha on the current bra
 ## Rules of the road
 
 - Push `dev` before releasing — stanza blocks if local commits are ahead of the remote.
+- A release checks its preconditions before it changes anything; `--check` runs only those checks.
 - Use `-y` (`--yes`) for non-interactive runs.
 - Alpha versions live on `dev`; stable releases are tagged on `main` only.
 - A stable release blocks on an empty `## [Unreleased]`; fill it first (or pass `--no-changelog`).
