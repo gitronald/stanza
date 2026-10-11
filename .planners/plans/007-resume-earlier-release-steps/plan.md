@@ -1,10 +1,10 @@
 ---
 id: 7
 slug: resume-earlier-release-steps
-status: implemented
+status: done
 branch: feature/resume-earlier-release-steps
 created: 2026-10-09T23:02:03-07:00
-concluded:
+concluded: 2026-10-11T01:10:33-07:00
 pr: https://github.com/gitronald/stanza/pull/18
 ---
 
@@ -108,10 +108,34 @@ then `release pr` re-run; a `--local --no-dev-cycle` release, then a remote
   - Docs (`e4e06d1`): help text, README, guide, CHANGELOG `[Unreleased]`.
 - **2026-10-11T00:39:58-07:00** — Implemented: 6 commits ahead of `dev`.
 
+- **2026-10-11T01:10:49-07:00** — Review gate (`/code-review`, medium) on
+  PR #18; the summary is posted on the PR. 6 findings after verification.
+  - Review follow-up (`43249b1`), each with a test that fails on the pre-fix
+    code (release workflow 594 -> 608 checks; all nine test files pass):
+    - `resume_merged_release` used `pull --ff-only`, a no-op when local main
+      is ahead of origin, so `git_tag_version` pushed unreleased local commits
+      with the tag (reproduced on the old code). `find_merged_release` now
+      refuses in preflight when local main carries commits origin's lacks,
+      and the resume fast-forwards from the ref already fetched (one fetch
+      fewer).
+    - The same-command re-run hint dropped `--pr-note` and `--skip-checks`;
+      it now carries both, the note shell-quoted.
+    - `preflight_resumed_bump` returned early without a PR, so a resumed
+      `--no-pr` bump already merged on origin was tagged instead of refused.
+      The guard now runs for any remote release and names
+      `release merge --no-pr`, which the test runs to finish the release.
+  - Conscious no-ops: `fetch origin <base>` without a refspec can leave
+    `origin/<base>` unset in a single-branch clone, but the same pattern
+    already exists on dev; the push blocks duplicated between
+    `resume_shipped_release`/`git_tag_version` and
+    `resume_version_bump_on_dev`/`create_version_bump_on_dev` are 6-8 lines
+    whose messages differ by design.
+  - Rejected in verification: `--check` fetching (dev's preflight already
+    does), and a helper for the one-line `gh pr view` URL lookup.
+
 ## Handoff
 
-State: implemented on `feature/resume-earlier-release-steps`, PR #18. All
-committed and pushed.
+State: closed. PR #18 merged; nothing pending.
 
 Questions: none open.
 
@@ -121,3 +145,20 @@ Not verified:
   leaves the local base branch behind, which the case 1 test simulates by
   resetting it.
 - bash 3.2 (plan 005) and ShellCheck (not installed here).
+
+## Retrospective
+
+- All three cases were automated, not just hinted. The plan had expected
+  case 3 might need only a better hint, but comparing against
+  `origin/<base>` instead of fetching into the local branch made the
+  automatic resume cheaper than the hint.
+- Requiring both the second parent and the tree match (not the
+  `version [release]` subject) is what made case 1 safe: a PR merged by hand
+  in the web UI still resumes, and a wrong commit is refused, not tagged.
+- The review found that two of the new resume paths trusted local state
+  their sibling path had already learned to check: main ahead of origin,
+  and the `--no-pr` variant of "already merged". The next resume path
+  should start from `resume_shipped_release`'s ahead/diverged guard.
+- A hint that says "run the same command again" has to rebuild the whole
+  command line. A flag list kept beside the parser would make that harder
+  to get wrong than picking flags by hand.
