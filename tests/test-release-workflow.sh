@@ -1176,6 +1176,70 @@ test_local_cycle_resume() {
     cleanup
 }
 
+# --- Earlier steps resumed (plan 007) --------------------------------------
+
+# The sha of <ref> on the bare remote, or empty.
+remote_sha() {
+    git --git-dir="$TEST_TMPDIR/remote.git" rev-parse -q --verify "$1" 2>/dev/null || true
+}
+
+test_local_release_finished_remotely() {
+    echo ""
+    echo "A --local release finished against the remote pushes main with the tag"
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --local --no-dev-cycle >/dev/null 2>&1
+    git checkout -q dev
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "pushes main with the tag" "$out" "v0.1.0  pushed with main (resumed)"
+    assert_eq "release merge on origin/main" "$(git rev-parse main)" "$(remote_sha main)"
+    assert_eq "tag on origin" "$(git rev-parse v0.1.0)" "$(remote_sha v0.1.0)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "dev cycle pushed" "$(git rev-parse dev)" "$(remote_sha dev)"
+    teardown_remote_repo
+
+    # The local release also ran its dev cycle: the resume pushes the rest.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --local >/dev/null 2>&1
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "cycled: resume exits 0" "0" "$code"
+    assert_contains "cycled: pushes main with the tag" "$out" "v0.1.0  pushed with main (resumed)"
+    assert_contains "cycled: pushes the advanced dev" "$out" "0.1.1a0 on dev (already advanced, pushed)"
+    assert_eq "cycled: tag on origin" "$(git rev-parse v0.1.0)" "$(remote_sha v0.1.0)"
+    assert_eq "cycled: dev pushed" "$(git rev-parse dev)" "$(remote_sha dev)"
+    teardown_remote_repo
+
+    # origin/main moved on meanwhile: refuse, push nothing.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --local --no-dev-cycle >/dev/null 2>&1
+    git checkout -q -b hotfix origin/main
+    git commit -q --allow-empty -m "hotfix"
+    git push -q origin hotfix:main
+    git checkout -q dev
+    git branch -q -D hotfix
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "diverged: exits 1" "1" "$code"
+    assert_contains "diverged: says so" "$out" "main has diverged from origin/main; not resuming"
+    assert_not_contains "diverged: no fetch error" "$out" "non-fast-forward"
+    assert_eq "diverged: tag not pushed" "" "$(remote_sha v0.1.0)"
+    teardown_remote_repo
+
+    # main gained a commit after the local release: not pushed along with it.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --local --no-dev-cycle >/dev/null 2>&1
+    git commit -q --allow-empty -m "unreleased"
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "ahead: exits 1" "1" "$code"
+    assert_contains "ahead: names the extra commits" "$out" "main has commits after v0.1.0 that origin/main lacks"
+    assert_eq "ahead: main not pushed" "$(git rev-parse origin/main)" "$(remote_sha main)"
+    teardown_remote_repo
+}
+
 # --- Run -------------------------------------------------------------------
 
 test_merge_requires_dev() {
@@ -1936,6 +2000,7 @@ test_subshell_error_reaches_json
 test_prerelease_push_failure_warns
 test_stalled_fetch_stops_cycle
 test_local_cycle_resume
+test_local_release_finished_remotely
 test_checks_pass_then_merge
 test_checks_fail_stops_merge
 test_checks_none_reported

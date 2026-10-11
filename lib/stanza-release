@@ -1341,10 +1341,11 @@ create_new_prerelease_cycle() {
 #     merge and tag are done and the dev cycle is not; or
 #   - dev's last commit is the dev-cycle bump that follows its nearest tag: the
 #     cycle is done locally and may still need its push.
-# Sets SHIPPED_TAG_UNPUSHED=true when only this clone has the tag, and fetches
-# it when only origin has it. Returns 1 when no such release exists. Part of
-# release_preflight: an unreadable or conflicting remote tag, or a failed fetch,
-# is recorded with preflight_fail and returns 1.
+# Sets SHIPPED_TAG_UNPUSHED=true when only this clone has the tag (a --local
+# release finished later against the remote), and fetches it when only origin
+# has it. Returns 1 when no such release exists. Part of release_preflight: an
+# unreadable or conflicting remote tag, or a failed fetch, is recorded with
+# preflight_fail and returns 1.
 find_shipped_release() {
     SHIPPED_TAG=""
     SHIPPED_TAG_UNPUSHED=false
@@ -1355,11 +1356,10 @@ find_shipped_release() {
         [[ "$(git log -1 --format=%s)" == "version [prerelease]: $version" ]] || return 1
         tag=$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>/dev/null) || return 1
         [[ "$(bump_version_string "${tag#v}" prerelease 2>/dev/null)" == "$version" ]] || return 1
-        SHIPPED_TAG="$tag"
-        return 0
+    else
+        tag="v$version"
     fi
 
-    tag="v$version"
     local local_sha remote_sha=""
     local_sha=$(git rev-parse -q --verify "refs/tags/$tag" 2>/dev/null) || local_sha=""
     if ! should_skip_remote; then
@@ -1390,13 +1390,31 @@ find_shipped_release() {
 
 # Resume a release that find_shipped_release found: bring the base branch level
 # with origin (the dev cycle merges it back), check that it carries the tag, and
-# push the tag when only this clone has it. Sets RELEASE_TAG_NAME and
-# RELEASE_TAG_PUSHED as git_tag_version does.
+# push the tag when only this clone has it. A base branch ahead of origin's with
+# the tag at its head, as a --local release leaves it, is pushed with the tag
+# in one atomic push instead. Sets RELEASE_TAG_NAME and RELEASE_TAG_PUSHED as
+# git_tag_version does.
 resume_shipped_release() {
-    local tag="$1"
+    local tag="$1" push_base=false
     step_start tag
     if ! should_skip_remote; then
-        git_quiet fetch origin "$BASE_BRANCH:$BASE_BRANCH"
+        git_quiet fetch origin "$BASE_BRANCH"
+        local base_sha origin_sha
+        base_sha=$(git rev-parse -q --verify "refs/heads/$BASE_BRANCH") || base_sha=""
+        origin_sha=$(git rev-parse --verify "refs/remotes/origin/$BASE_BRANCH")
+        if [[ -z "$base_sha" ]] || git merge-base --is-ancestor "$base_sha" "$origin_sha"; then
+            git_quiet update-ref "refs/heads/$BASE_BRANCH" "$origin_sha"
+        elif ! git merge-base --is-ancestor "$origin_sha" "$base_sha"; then
+            print_error "$BASE_BRANCH has diverged from origin/$BASE_BRANCH; not resuming" \
+                "reconcile them by hand (git log --oneline --left-right $BASE_BRANCH...origin/$BASE_BRANCH shows both sides), then: git checkout dev && stanza release merge"
+            exit 1
+        elif [[ "$base_sha" != "$(git rev-parse "$tag^{commit}")" ]]; then
+            print_error "$BASE_BRANCH has commits after $tag that origin/$BASE_BRANCH lacks; not pushing them with the release" \
+                "check them (git log --oneline $tag..$BASE_BRANCH) and push $BASE_BRANCH by hand, then: git checkout dev && stanza release merge"
+            exit 1
+        else
+            push_base=true
+        fi
     fi
     if ! git merge-base --is-ancestor "$tag" "$BASE_BRANCH" 2>/dev/null; then
         print_error "tag $tag is not on $BASE_BRANCH; not resuming" \
@@ -1404,7 +1422,23 @@ resume_shipped_release() {
         exit 1
     fi
     RELEASE_TAG_NAME="$tag"
-    if [[ "$SHIPPED_TAG_UNPUSHED" == "true" ]]; then
+    if [[ "$push_base" == "true" ]]; then
+        # The release merge was made without the remote; push it with its tag,
+        # both or neither, as git_tag_version does.
+        local refs=("$BASE_BRANCH") push_out
+        [[ "$SHIPPED_TAG_UNPUSHED" == "true" ]] && refs+=("refs/tags/$tag")
+        if push_out=$(git_net push --atomic origin "${refs[@]}" 2>&1); then
+            if [[ "$VERBOSE" == "true" ]]; then printf '%s\n' "$push_out" >&2; fi
+        else
+            print_error "push of $BASE_BRANCH with the release merge to origin failed; nothing was pushed"
+            print_output "$push_out"
+            print_hint "retry: git push --atomic origin ${refs[*]}"
+            print_hint "or resume once it can be pushed: git checkout dev && stanza release merge"
+            exit 1
+        fi
+        print_row tag "$tag  pushed with $BASE_BRANCH (resumed)"
+        RELEASE_TAG_PUSHED=true
+    elif [[ "$SHIPPED_TAG_UNPUSHED" == "true" ]]; then
         git_quiet push origin "refs/tags/$tag"
         print_row tag "$tag  pushed (resumed)"
         RELEASE_TAG_PUSHED=true
