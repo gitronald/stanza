@@ -30,6 +30,10 @@ RELEASE_PR_MERGED=false
 # True once the dev cycle finds dev on the next prerelease, bumped by this run
 # or an earlier one, so the failure advice never suggests a second bump.
 DEV_ADVANCED=false
+# Failures recorded by release_preflight (see preflight_fail).
+PREFLIGHT_ERRORS=()
+PREFLIGHT_HINTS=()
+PREFLIGHT_OUTPUT=()
 
 # Also clears the recorded error and hints, so an error or hint printed by an
 # earlier, successful step is not taken as the failing step's own.
@@ -58,8 +62,14 @@ release_failure_advice() {
     [[ "$YES_TO_ALL" == "true" ]] && yes=" -y"
     [[ "$LOCAL_ONLY" == "true" ]] && merge_flags=" --local"
     [[ "$NO_PR" == "true" ]] && merge_flags="$merge_flags --no-pr"
+    [[ "$NO_DEV_PRERELEASE" == "true" && "$PHASE" != "pr" ]] && merge_flags="$merge_flags --no-dev-cycle"
     local resume_merge="stanza release merge$merge_flags$yes"
-    local pr_create="gh pr create --base $base --head dev --title $tag --fill"
+    # The same command again resumes at the push and the PR (find_unfinished_bump),
+    # with every flag the PR and the merge still read.
+    local rerun_flags="$merge_flags"
+    [[ -n "$PR_NOTE" ]] && rerun_flags="$rerun_flags --pr-note $(printf '%q' "$PR_NOTE")"
+    [[ "$SKIP_CHECKS" == "true" ]] && rerun_flags="$rerun_flags --skip-checks"
+    local rerun="stanza release $CMD_LABEL$rerun_flags$yes"
     local manual
     FAILED_STATE=""
     RESUME_CMD=""
@@ -69,26 +79,14 @@ release_failure_advice() {
             FAILED_STATE="the version bump did not complete; nothing was pushed"
             RESUME_NOTES="check git status and git log, undo the partial bump, then re-run: stanza release $CMD_LABEL$yes"
             ;;
-        push)
-            FAILED_STATE="$tag is committed on dev but not pushed"
-            if [[ "$PHASE" == "pr" ]]; then
-                RESUME_CMD="git push origin dev && $pr_create"
-                RESUME_NOTES="then review the PR and run: stanza release merge"
-            elif release_uses_pr; then
-                RESUME_CMD="git push origin dev && $pr_create && $resume_merge"
+        push|pr)
+            if [[ "$step" == "push" ]]; then
+                FAILED_STATE="$tag is committed on dev but not pushed"
             else
-                RESUME_CMD="git push origin dev && $resume_merge"
+                FAILED_STATE="$tag is pushed to dev; nothing is merged"
             fi
-            ;;
-        pr)
-            FAILED_STATE="$tag is pushed to dev; nothing is merged"
-            if [[ "$PHASE" == "pr" ]]; then
-                RESUME_CMD="$pr_create"
-                RESUME_NOTES="skip that if the PR is open; then review it and run: stanza release merge"
-            else
-                RESUME_CMD="$resume_merge"
-                RESUME_NOTES="if no PR is open, first: $pr_create"
-            fi
+            RESUME_CMD="$rerun"
+            [[ "$PHASE" == "pr" ]] && RESUME_NOTES="then review the PR and run: stanza release merge"
             ;;
         checks)
             if release_uses_pr; then
@@ -113,8 +111,13 @@ release_failure_advice() {
             ;;
         merge)
             if [[ "$RELEASE_PR_MERGED" == "true" ]]; then
-                FAILED_STATE="PR #$RELEASE_PR_NUMBER is merged; $tag is not tagged"
-                RESUME_CMD="git checkout $base && git pull origin $base && git tag $tag && git checkout dev && $resume_merge"
+                # 'release merge' finds the merge on origin and tags it.
+                if [[ -n "$RELEASE_PR_NUMBER" ]]; then
+                    FAILED_STATE="PR #$RELEASE_PR_NUMBER is merged; $tag is not tagged"
+                else
+                    FAILED_STATE="the release is merged into $base; $tag is not tagged"
+                fi
+                RESUME_CMD="git checkout dev && $resume_merge"
             else
                 FAILED_STATE="$tag is not released"
                 RESUME_CMD="git checkout dev && $resume_merge"
@@ -162,7 +165,9 @@ release_failure_advice() {
 #    "resume":...,"hint":...}
 # failed_step is "preflight" when no step had started. error is the last
 # print_error message, read from STANZA_ERROR_LOG when there is one, so an error
-# printed inside $(...) counts. The exit status is kept.
+# printed inside $(...) counts. When release_preflight refused the run, error
+# and hint are its first failure, and errors lists every failure as
+# {"error":...,"hint":...}. The exit status is kept.
 on_release_exit() {
     local status=$?
     trap - EXIT
@@ -176,6 +181,11 @@ on_release_exit() {
     [[ $status -eq 0 ]] && exit 0
     local step="${RELEASE_STEP:-preflight}"
     local own_hints="$STANZA_HINTS"
+    # A preflight that reported several failures leads with its first.
+    if [[ ${#PREFLIGHT_ERRORS[@]} -gt 0 ]]; then
+        error="${PREFLIGHT_ERRORS[0]}"
+        own_hints="${PREFLIGHT_HINTS[0]}"
+    fi
     FAILED_STATE=""
     RESUME_CMD=""
     RESUME_NOTES=""
@@ -208,6 +218,15 @@ on_release_exit() {
         else
             json_set_or_null resume "$RESUME_CMD"
             json_set_or_null hint "$RESUME_NOTES"
+        fi
+        if [[ ${#PREFLIGHT_ERRORS[@]} -gt 0 ]]; then
+            local items="" i hint
+            for ((i = 0; i < ${#PREFLIGHT_ERRORS[@]}; i++)); do
+                hint="null"
+                [[ -n "${PREFLIGHT_HINTS[i]}" ]] && hint="\"$(json_escape "${PREFLIGHT_HINTS[i]}")\""
+                items="${items:+$items,}{\"error\":\"$(json_escape "${PREFLIGHT_ERRORS[i]}")\",\"hint\":$hint}"
+            done
+            json_set_raw errors "[$items]"
         fi
         json_emit
     fi
@@ -249,10 +268,11 @@ push_with_retry() {
     return 1
 }
 
-# Tag and push version.
+# Tag and push version: HEAD, or the commit given.
+# Usage: git_tag_version <tag> [commit]
 # Side-effect: sets RELEASE_TAG_NAME, RELEASE_TAG_PUSHED at module scope.
 git_tag_version() {
-    local version="$1"
+    local version="$1" target="${2:-HEAD}"
     step_start tag
 
     # Check if tag already exists
@@ -262,7 +282,7 @@ git_tag_version() {
         print_hint "$BASE_BRANCH has the release merge, untagged; check the existing tag (git show $version) and tag by hand"
         exit 1
     fi
-    git tag "$version"
+    git tag "$version" "$target"
     RELEASE_TAG_NAME="$version"
 
     # Push to remote if not in local-only mode. --atomic: the remote updates
@@ -394,7 +414,7 @@ bump_and_commit_version() {
 
     # CHANGELOG promotion: stable releases only (skips prereleases and the
     # post-release dev-cycle bump). An empty [Unreleased] was already rejected by
-    # check_changelog_before_release; promote_changelog promotes a populated one
+    # release_preflight; promote_changelog promotes a populated one
     # in place and is a no-op (returns non-zero) otherwise.
     BUMP_CHANGELOG_PROMOTED=""
     if [[ "$NO_CHANGELOG" != "true" && "$version" != *a* ]]; then
@@ -515,6 +535,7 @@ RELEASE_CHANGELOG_PROMOTED=false
 VERBOSE="${VERBOSE:-false}"
 NO_PR=false
 SKIP_CHECKS=false
+CHECK_ONLY=false
 
 # Detect a leading phase token (pr|merge) before the bump-type parser.
 # Phases let the workflow run in two stages: open the PR, pause for review,
@@ -572,6 +593,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-checks)
             SKIP_CHECKS=true
+            shift
+            ;;
+        --check)
+            CHECK_ONLY=true
             shift
             ;;
         --no-dev-cycle)
@@ -663,8 +688,11 @@ Phases let an agent pause for review between opening and merging a PR.
 a protected base branch refuses that push, and nothing is tagged remotely.
 
 A run that stops partway names the step that failed and the command that
-resumes it. 'merge' resumes a release that is already merged and tagged: it
-pushes the tag if only this clone has it, then runs the dev cycle.
+resumes it. The same 'release <type>' or 'release pr <type>' resumes a bump
+that is on dev but not released: it pushes dev and opens the PR instead of
+bumping again. 'merge' resumes a release that is already merged: it tags the
+PR's merge when the tag is missing, pushes the tag if only this clone has it
+(with the base branch, after a --local release), then runs the dev cycle.
 A git transfer that stays below 1000 bytes/s for STANZA_NET_STALL_SECONDS
 (default 30) is abandoned; 0 turns the limit off.
 
@@ -674,12 +702,19 @@ merge, with the PR left open; no checks at all is a pass. The wait gives up
 after STANZA_CHECKS_TIMEOUT seconds (default 1800; 0 waits without limit). A
 release also refuses to bump a dev whose head already failed CI.
 
+Before it changes anything, a release checks everything the phase needs: the
+branch, a clean tree, dev level with origin, gh authentication, the target tag
+free locally and on origin and above the latest tag, and for 'merge' the open
+PR. Every failed check is reported in one run. --check runs only these checks.
+
 Options:
       --pr-note <TEXT>     Append a note to the PR body (full and pr phases)
       --no-pr              Merge dev into the base branch directly, without a
                            PR (full and merge phases; remote steps still run)
       --skip-checks        Merge without waiting for CI, and bump a dev whose
                            CI failed (for checks known broken for other reasons)
+      --check              Run the preflight checks only, change nothing, and
+                           exit 0 when the release could go ahead
       --no-dev-cycle  Skip the post-release dev cycle: no merge-back to
                            dev and no next prerelease bump (full and merge phases)
       --no-changelog       Skip CHANGELOG [Unreleased] promotion and its
@@ -704,6 +739,7 @@ Examples:
   stanza release patch -y --no-dev-cycle  Release, but leave dev untouched
   stanza release patch -y --no-changelog  Release without promoting CHANGELOG
   stanza release merge -y --skip-checks   Merge without waiting for CI
+  stanza release patch --check             Check a patch release could run
   stanza --json release patch -y           Machine-readable output
 EOF
 }
@@ -785,6 +821,7 @@ fi
 
 [[ "$LOCAL_ONLY" == "true" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, local"
 [[ "$NO_PR" == "true" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, no PR"
+[[ "$CHECK_ONLY" == "true" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, check only"
 print_header "release $CMD_LABEL" "$HEADER_CONTEXT"
 print_row_v checks "branch=$CURRENT_BRANCH, project=$PROJECT_TYPE_DETECTED, phase=$PHASE, yes=$YES_TO_ALL"
 for _warning in "${FLAG_WARNINGS[@]}"; do
@@ -793,18 +830,8 @@ done
 
 # ------------------------------------------------------------------------------
 
-# Handle prerelease workflow
+# Handle prerelease workflow (release_preflight has checked it can run)
 handle_prerelease_workflow() {
-    if [[ "$PROJECT_TYPE_DETECTED" == "latex" ]]; then
-        print_error "LaTeX projects don't support prerelease bumps" \
-            "use 'stanza release patch|minor|major' instead"
-        exit 1
-    fi
-    check_not_protected_branch
-    check_uncommitted_changes
-    if ! should_skip_remote; then
-        check_branch_up_to_date "$CURRENT_BRANCH"
-    fi
     confirm_step "Create [$BUMP_TYPE] version commit on current branch"
 
     step_start bump
@@ -858,33 +885,15 @@ handle_prerelease_workflow() {
     exit 0
 }
 
-# Pre-flight for a stable release: refuse to ship with an empty CHANGELOG
-# "[Unreleased]" section. Runs before any version mutation so an abort leaves
-# the working tree untouched. A missing CHANGELOG.md, a changelog with no
-# [Unreleased] heading, or --no-changelog all pass through silently.
-check_changelog_before_release() {
-    [[ "$NO_CHANGELOG" == "true" ]] && return 0
-    if [[ "$(changelog_unreleased_status)" == "empty" ]]; then
-        print_error "CHANGELOG.md [Unreleased] is empty; add entries before releasing" \
-            "fill ## [Unreleased], or pass --no-changelog to skip changelog promotion"
-        exit 1
-    fi
-}
-
 # Step 1: Create version bump commit on dev branch.
 # Side-effect: sets RELEASE_FROM_VERSION, RELEASE_TO_VERSION, RELEASE_COMMIT_SHA,
-# RELEASE_PUSHED at module scope for downstream JSON emission.
+# RELEASE_PUSHED at module scope for downstream JSON emission. release_preflight
+# has checked that it can run.
 create_version_bump_on_dev() {
-    # Checks
-    require_branch "dev"
-    check_uncommitted_changes
-    if ! should_skip_remote; then
-        check_branch_up_to_date "dev"
+    if [[ "$BUMP_RESUMED" == "true" ]]; then
+        resume_version_bump_on_dev
+        return 0
     fi
-    check_changelog_before_release
-    check_dev_ci_before_bump
-
-    # Bump and commit
     RELEASE_FROM_VERSION="$CURRENT_VERSION"
     confirm_step "1: Create version bump [$BUMP_TYPE] commit on dev branch"
     step_start bump
@@ -901,6 +910,37 @@ create_version_bump_on_dev() {
         step_start push
         git_quiet push origin dev
         print_row push "origin/dev"
+        step_done
+        RELEASE_PUSHED=true
+    elif [[ "$LOCAL_ONLY" == "true" ]]; then
+        print_row push "skipped (--local)"
+    else
+        print_row push "skipped (no remote)"
+    fi
+}
+
+# Step 1, resumed: dev already carries the bump an earlier run committed
+# (find_unfinished_bump). Push it unless origin/dev has it. Sets the variables
+# create_version_bump_on_dev sets; RELEASE_FROM_VERSION is empty, since the run
+# did not see the version before the bump.
+resume_version_bump_on_dev() {
+    RELEASE_FROM_VERSION=""
+    RELEASE_TO_VERSION="$CURRENT_VERSION"
+    RELEASE_COMMIT_SHA=$(git rev-parse --short HEAD)
+    confirm_step "1: Resume the $BUMP_TYPE bump to $RELEASE_TO_VERSION already on dev"
+    step_start bump
+    print_row bump "$RELEASE_TO_VERSION on dev, committed earlier ($RELEASE_COMMIT_SHA); resuming"
+    step_done
+
+    RELEASE_PUSHED=false
+    if ! should_skip_remote; then
+        step_start push
+        if [[ "$(git rev-parse dev)" == "$(git rev-parse -q --verify refs/remotes/origin/dev)" ]]; then
+            print_row push "origin/dev (already pushed)"
+        else
+            git_quiet push origin dev
+            print_row push "origin/dev"
+        fi
         step_done
         RELEASE_PUSHED=true
     elif [[ "$LOCAL_ONLY" == "true" ]]; then
@@ -1023,9 +1063,12 @@ ci_count() {
 # Wait for the checks of a PR or the runs on a commit to finish. Sets
 # CHECKS_RESULT (passed or none) and prints the checks row on success. On a
 # failed check or a timeout, prints the error, sets CHECKS_STOP, and returns 1.
-# On a read error, sets CHECKS_STOP=error and returns 1 without printing, so the
-# caller decides whether it stops the release.
+# A read error is retried, one poll interval apart, so a network blip does not
+# stop a release; after CHECKS_READ_ATTEMPTS failed reads in a row, sets
+# CHECKS_STOP=error and returns 1 without printing, so the caller decides
+# whether it stops the release.
 # Usage: wait_for_ci pr <number> "PR #1" | wait_for_ci commit <sha> "dev (abc1234)"
+CHECKS_READ_ATTEMPTS=3
 wait_for_ci() {
     local kind="$1" ref="$2" what="$3"
     local timeout grace interval settle
@@ -1033,15 +1076,27 @@ wait_for_ci() {
     grace=$(checks_seconds STANZA_CHECKS_GRACE_SECONDS 15)
     interval=$(checks_seconds STANZA_CHECKS_INTERVAL 10)
     settle=$(( interval < 3 ? interval : 3 ))
-    local start=$SECONDS waited=false status elapsed pending total
+    local start=$SECONDS waited=false status elapsed pending total read_failures=0
     while true; do
         status=0
         read_ci "$kind" "$ref" || status=$?
         elapsed=$((SECONDS - start))
         if [[ $status -eq 1 ]]; then
-            CHECKS_STOP=error
-            return 1
+            read_failures=$((read_failures + 1))
+            if [[ $read_failures -ge $CHECKS_READ_ATTEMPTS ]] ||
+                [[ $timeout -gt 0 && $elapsed -ge $timeout ]]; then
+                CHECKS_STOP=error
+                return 1
+            fi
+            if [[ "$kind" == "pr" ]]; then
+                print_warning "could not read the checks of $what; retrying in ${interval}s"
+            else
+                print_warning "could not read the CI runs on $what; retrying in ${interval}s"
+            fi
+            sleep "$interval"
+            continue
         fi
+        read_failures=0
         if [[ $status -eq 2 ]]; then
             if [[ $elapsed -ge $grace ]]; then
                 CHECKS_RESULT=none
@@ -1086,8 +1141,8 @@ wait_for_ci() {
     done
 }
 
-# Whether gh can read CI for this repo. The PR path requires gh and checked its
-# auth up front; under --no-pr, gh is optional and the gate is best-effort.
+# Whether gh can read CI for this repo. The PR path requires gh and preflight
+# checked its auth; under --no-pr, gh is optional and the gate is best-effort.
 ci_readable() {
     release_uses_pr && return 0
     command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1
@@ -1095,7 +1150,8 @@ ci_readable() {
 
 # Refuse to bump a dev whose head commit already failed CI, so a known-red dev
 # gets no version commit pushed onto it. Runs still in progress are not waited
-# on: the merge gate waits on the release commit itself.
+# on: the merge gate waits on the release commit itself. A preflight check: a
+# failure is recorded with preflight_fail.
 check_dev_ci_before_bump() {
     should_skip_remote && return 0
     [[ "$SKIP_CHECKS" == "true" ]] && return 0
@@ -1115,10 +1171,9 @@ check_dev_ci_before_bump() {
         failed=$(ci_names fail)
         local yes=""
         [[ "$YES_TO_ALL" == "true" ]] && yes=" -y"
-        print_error "CI failed on dev's head (${sha:0:7}): $failed; not bumping" \
-            "fix on dev and push, then: stanza release $CMD_LABEL$yes"
-        print_hint "or, if the failure is unrelated to the release: stanza release $CMD_LABEL$yes --skip-checks"
-        exit 1
+        preflight_fail "CI failed on dev's head (${sha:0:7}): $failed; not bumping" \
+            "fix on dev and push, then: stanza release $CMD_LABEL$yes"$'\n'"or, if the failure is unrelated to the release: stanza release $CMD_LABEL$yes --skip-checks"
+        return 0
     fi
     print_row_v checks "dev (${sha:0:7}): no failed runs"
 }
@@ -1163,10 +1218,18 @@ wait_for_release_ci() {
 }
 
 # Step 2a: Open a PR from dev into base (no merge — the create half of the
-# old gh_create_and_merge_pr). Sets RELEASE_PR_NUMBER, RELEASE_PR_URL.
+# old gh_create_and_merge_pr), or take the release PR an earlier run opened
+# (RESUME_PR_NUMBER). Sets RELEASE_PR_NUMBER, RELEASE_PR_URL.
 gh_create_pr() {
     local version_tag="$1"
     step_start pr
+    if [[ -n "$RESUME_PR_NUMBER" ]]; then
+        RELEASE_PR_NUMBER="$RESUME_PR_NUMBER"
+        RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
+        print_row pr "#$RELEASE_PR_NUMBER $RELEASE_PR_URL (opened earlier)"
+        step_done
+        return 0
+    fi
     gh_quiet pr create --base "$BASE_BRANCH" --head dev --title "$version_tag" --fill --assignee @me
 
     # Get most recent open PR number
@@ -1199,57 +1262,21 @@ gh_create_pr() {
     step_done
 }
 
-# Step 2b: Merge the open dev->base PR (the merge half of the old function).
-# Usage: gh_merge_pr <version_tag> [pr_number]
-# With an explicit PR number (full flow passes the one it just created), that
-# PR is merged directly. With no number (merge phase) the single open PR is
-# resolved, erroring if there are none or more than one. Either way, refuses to
-# merge when dev has advanced past the PR head (would ship unreviewed commits),
-# then waits for the PR's checks (the checks step) and stops if any fail.
+# Step 2b: Merge the release PR. The full flow passes the PR it just opened;
+# the merge phase passes the one release_preflight resolved and checked (open,
+# into the base branch, its head at local dev, its title the tag). Waits for the
+# PR's checks (the checks step) and stops if any fail, then merges only while
+# the PR head is still local dev's head, so a push to dev during the wait is
+# not shipped unreviewed.
 # The merge commit subject is "version [release]: <version_tag> - PR #<N>".
+# Usage: gh_merge_pr <version_tag> <pr_number>
 # Sets RELEASE_PR_NUMBER, RELEASE_PR_URL.
 gh_merge_pr() {
     local version_tag="$1"
-    local pr_number="${2:-}"
+    RELEASE_PR_NUMBER="$2"
     step_start merge
-    if [[ -z "$pr_number" ]]; then
-        local open_count
-        open_count=$(gh pr list --base "$BASE_BRANCH" --head dev --state open --json number --jq 'length' 2>/dev/null || echo 0)
-        if [[ "$open_count" -gt 1 ]]; then
-            print_error "Multiple open dev->$BASE_BRANCH PRs ($open_count); target is ambiguous" \
-                "pin one: stanza release merge <pr-number>"
-            exit 1
-        fi
-        pr_number=$(gh_get_last_open_pr_number)
-    fi
-    if [[ -z "$pr_number" ]]; then
-        print_error "No open PR from dev to $BASE_BRANCH to merge" \
-            "run 'stanza release pr <type>' first"
-        exit 1
-    fi
-    RELEASE_PR_NUMBER="$pr_number"
-
-    # Refuse to merge if dev moved past the reviewed PR head.
-    local pr_head dev_head pr_info pr_base pr_state
-    pr_info=$(gh pr view "$RELEASE_PR_NUMBER" --json headRefOid,baseRefName,state \
-        --jq '[.headRefOid, .baseRefName, .state] | join("|")' 2>/dev/null) || pr_info=""
-    IFS='|' read -r pr_head pr_base pr_state <<< "$pr_info"
-    dev_head=$(git rev-parse --verify dev 2>/dev/null) || dev_head=""
-    if [[ -z "$pr_head" || -z "$dev_head" ]]; then
-        print_error "Could not verify PR #$RELEASE_PR_NUMBER head against dev" \
-            "check GitHub access and the local dev branch, then retry"
-        exit 1
-    fi
-    if [[ "$pr_state" != "OPEN" || "$pr_base" != "$BASE_BRANCH" ]]; then
-        print_error "PR #$RELEASE_PR_NUMBER must be OPEN and target $BASE_BRANCH" \
-            "select the open release PR from dev to $BASE_BRANCH"
-        exit 1
-    fi
-    if [[ "$pr_head" != "$dev_head" ]]; then
-        print_error "dev has advanced past PR #$RELEASE_PR_NUMBER head; merge would ship unreviewed commits" \
-            "re-run 'stanza release pr <type>' to refresh the PR"
-        exit 1
-    fi
+    local dev_head
+    dev_head=$(git rev-parse --verify dev)
 
     wait_for_release_ci pr "$RELEASE_PR_NUMBER"
     step_start merge
@@ -1257,7 +1284,7 @@ gh_merge_pr() {
     RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
     confirm_step "2: Merge PR #$RELEASE_PR_NUMBER from dev into $BASE_BRANCH"
     gh_quiet pr merge "$RELEASE_PR_NUMBER" --merge \
-        --match-head-commit "$pr_head" \
+        --match-head-commit "$dev_head" \
         --subject "version [release]: $version_tag - PR #$RELEASE_PR_NUMBER" --body ""
     RELEASE_PR_MERGED=true
     git_quiet checkout "$BASE_BRANCH"
@@ -1360,44 +1387,47 @@ create_new_prerelease_cycle() {
 #     merge and tag are done and the dev cycle is not; or
 #   - dev's last commit is the dev-cycle bump that follows its nearest tag: the
 #     cycle is done locally and may still need its push.
-# Sets SHIPPED_TAG_UNPUSHED=true when only this clone has the tag. Returns 1
-# when no such release exists. Exits on an unreadable or conflicting remote tag.
+# Sets SHIPPED_TAG_UNPUSHED=true when only this clone has the tag (a --local
+# release finished later against the remote), and fetches it when only origin
+# has it. Returns 1 when no such release exists. Part of release_preflight: an
+# unreadable or conflicting remote tag, or a failed fetch, is recorded with
+# preflight_fail and returns 1.
 find_shipped_release() {
     SHIPPED_TAG=""
     SHIPPED_TAG_UNPUSHED=false
-    local version tag
+    local version tag out
     version=$(get_current_version)
 
     if [[ "$version" == *a* ]]; then
         [[ "$(git log -1 --format=%s)" == "version [prerelease]: $version" ]] || return 1
         tag=$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>/dev/null) || return 1
         [[ "$(bump_version_string "${tag#v}" prerelease 2>/dev/null)" == "$version" ]] || return 1
-        SHIPPED_TAG="$tag"
-        return 0
+    else
+        tag="v$version"
     fi
 
-    tag="v$version"
     local local_sha remote_sha=""
     local_sha=$(git rev-parse -q --verify "refs/tags/$tag" 2>/dev/null) || local_sha=""
     if ! should_skip_remote; then
-        local out
         if ! out=$(git_net ls-remote --tags origin "refs/tags/$tag" 2>&1); then
-            print_error "could not read tag $tag from origin"
-            print_output "$out"
-            exit 1
+            preflight_fail "could not read tag $tag from origin" "" "$out"
+            return 1
         fi
         remote_sha=$(printf '%s\n' "$out" | awk -v ref="refs/tags/$tag" '$2 == ref { print $1 }')
     fi
     [[ -n "$local_sha" || -n "$remote_sha" ]] || return 1
     if [[ -n "$local_sha" && -n "$remote_sha" && "$local_sha" != "$remote_sha" ]]; then
-        print_error "tag $tag differs between this clone and origin" \
+        preflight_fail "tag $tag differs between this clone and origin" \
             "compare them (git show $tag; git ls-remote origin refs/tags/$tag) and resolve by hand"
-        exit 1
+        return 1
     fi
     if [[ -z "$local_sha" ]]; then
-        # Callers run this as an 'if' condition, where set -e is off: exit here,
-        # or a failed fetch resumes a release whose tag this clone lacks.
-        git_quiet fetch origin "refs/tags/$tag:refs/tags/$tag" || exit 1
+        # A failed fetch must not resume a release whose tag this clone lacks.
+        # --check reports the resume and leaves the fetch to the real run.
+        if [[ "$CHECK_ONLY" != "true" ]] && ! out=$(git_net fetch origin "refs/tags/$tag:refs/tags/$tag" 2>&1); then
+            preflight_fail "git fetch origin refs/tags/$tag:refs/tags/$tag failed" "" "$out"
+            return 1
+        fi
     elif ! should_skip_remote && [[ -z "$remote_sha" ]]; then
         SHIPPED_TAG_UNPUSHED=true
     fi
@@ -1406,13 +1436,31 @@ find_shipped_release() {
 
 # Resume a release that find_shipped_release found: bring the base branch level
 # with origin (the dev cycle merges it back), check that it carries the tag, and
-# push the tag when only this clone has it. Sets RELEASE_TAG_NAME and
-# RELEASE_TAG_PUSHED as git_tag_version does.
+# push the tag when only this clone has it. A base branch ahead of origin's with
+# the tag at its head, as a --local release leaves it, is pushed with the tag
+# in one atomic push instead. Sets RELEASE_TAG_NAME and RELEASE_TAG_PUSHED as
+# git_tag_version does.
 resume_shipped_release() {
-    local tag="$1"
+    local tag="$1" push_base=false
     step_start tag
     if ! should_skip_remote; then
-        git_quiet fetch origin "$BASE_BRANCH:$BASE_BRANCH"
+        git_quiet fetch origin "$BASE_BRANCH"
+        local base_sha origin_sha
+        base_sha=$(git rev-parse -q --verify "refs/heads/$BASE_BRANCH") || base_sha=""
+        origin_sha=$(git rev-parse --verify "refs/remotes/origin/$BASE_BRANCH")
+        if [[ -z "$base_sha" ]] || git merge-base --is-ancestor "$base_sha" "$origin_sha"; then
+            git_quiet update-ref "refs/heads/$BASE_BRANCH" "$origin_sha"
+        elif ! git merge-base --is-ancestor "$origin_sha" "$base_sha"; then
+            print_error "$BASE_BRANCH has diverged from origin/$BASE_BRANCH; not resuming" \
+                "reconcile them by hand (git log --oneline --left-right $BASE_BRANCH...origin/$BASE_BRANCH shows both sides), then: git checkout dev && stanza release merge"
+            exit 1
+        elif [[ "$base_sha" != "$(git rev-parse "$tag^{commit}")" ]]; then
+            print_error "$BASE_BRANCH has commits after $tag that origin/$BASE_BRANCH lacks; not pushing them with the release" \
+                "check them (git log --oneline $tag..$BASE_BRANCH) and push $BASE_BRANCH by hand, then: git checkout dev && stanza release merge"
+            exit 1
+        else
+            push_base=true
+        fi
     fi
     if ! git merge-base --is-ancestor "$tag" "$BASE_BRANCH" 2>/dev/null; then
         print_error "tag $tag is not on $BASE_BRANCH; not resuming" \
@@ -1420,7 +1468,23 @@ resume_shipped_release() {
         exit 1
     fi
     RELEASE_TAG_NAME="$tag"
-    if [[ "$SHIPPED_TAG_UNPUSHED" == "true" ]]; then
+    if [[ "$push_base" == "true" ]]; then
+        # The release merge was made without the remote; push it with its tag,
+        # both or neither, as git_tag_version does.
+        local refs=("$BASE_BRANCH") push_out
+        [[ "$SHIPPED_TAG_UNPUSHED" == "true" ]] && refs+=("refs/tags/$tag")
+        if push_out=$(git_net push --atomic origin "${refs[@]}" 2>&1); then
+            if [[ "$VERBOSE" == "true" ]]; then printf '%s\n' "$push_out" >&2; fi
+        else
+            print_error "push of $BASE_BRANCH with the release merge to origin failed; nothing was pushed"
+            print_output "$push_out"
+            print_hint "retry: git push --atomic origin ${refs[*]}"
+            print_hint "or resume once it can be pushed: git checkout dev && stanza release merge"
+            exit 1
+        fi
+        print_row tag "$tag  pushed with $BASE_BRANCH (resumed)"
+        RELEASE_TAG_PUSHED=true
+    elif [[ "$SHIPPED_TAG_UNPUSHED" == "true" ]]; then
         git_quiet push origin "refs/tags/$tag"
         print_row tag "$tag  pushed (resumed)"
         RELEASE_TAG_PUSHED=true
@@ -1428,6 +1492,71 @@ resume_shipped_release() {
         print_row tag "$tag  already released; resuming"
         if should_skip_remote; then RELEASE_TAG_PUSHED=false; else RELEASE_TAG_PUSHED=true; fi
     fi
+    step_done
+}
+
+# Find a release that an earlier run merged into the base branch on origin and
+# did not tag: the merge step stopped after gh pr merge succeeded. Called once
+# find_shipped_release has found no tag. Fetches the base branch and, when
+# dev's head is on it, looks for the merge that put it there: a merge commit
+# whose second parent is dev's head. Its tree must be dev's, so the commit
+# tagged ships exactly what dev carried. Sets MERGED_RELEASE_COMMIT (and
+# SHIPPED_TAG) and returns 0 when found; returns 1 when dev's head is not on
+# origin's base branch. Part of release_preflight: a failed fetch, or dev's head
+# on the base branch without such a merge, is recorded with preflight_fail.
+MERGED_RELEASE_COMMIT=""
+find_merged_release() {
+    local tag="$1" out dev_head commit
+    MERGED_RELEASE_COMMIT=""
+    should_skip_remote && return 1
+    if ! out=$(git_net fetch origin "$BASE_BRANCH" 2>&1); then
+        preflight_fail "Could not fetch from origin/$BASE_BRANCH" "" "$out"
+        return 1
+    fi
+    dev_head=$(git rev-parse dev)
+    git merge-base --is-ancestor "$dev_head" "origin/$BASE_BRANCH" || return 1
+    # The earliest merge of dev's head on the way to origin's base branch.
+    commit=$(git rev-list --merges --parents --reverse --ancestry-path \
+        "$dev_head..origin/$BASE_BRANCH" | awk -v d="$dev_head" '$3 == d { print $1; exit }')
+    if [[ -z "$commit" ]]; then
+        preflight_fail "dev's head is on origin/$BASE_BRANCH, but not through a merge commit; not tagging it" \
+            "find the release commit (git log --oneline origin/$BASE_BRANCH) and tag it by hand: git tag $tag <commit> && git push origin refs/tags/$tag"
+        return 1
+    fi
+    if [[ "$(git rev-parse "$commit^{tree}")" != "$(git rev-parse "$dev_head^{tree}")" ]]; then
+        preflight_fail "the merge of dev into $BASE_BRANCH (${commit:0:7}) differs from dev's tree; not tagging it" \
+            "compare them (git diff dev ${commit:0:7}), then tag by hand: git tag $tag ${commit:0:7} && git push origin refs/tags/$tag"
+        return 1
+    fi
+    # git_tag_version pushes the base branch with the tag: it must carry
+    # nothing origin's lacks.
+    local base_sha
+    base_sha=$(git rev-parse -q --verify "refs/heads/$BASE_BRANCH") || base_sha=""
+    if [[ -n "$base_sha" ]] && ! git merge-base --is-ancestor "$base_sha" "origin/$BASE_BRANCH"; then
+        preflight_fail "$BASE_BRANCH has commits that origin/$BASE_BRANCH lacks; not pushing them with $tag" \
+            "check them (git log --oneline origin/$BASE_BRANCH..$BASE_BRANCH), push or drop them by hand, then: git checkout dev && stanza release merge"
+        return 1
+    fi
+    MERGED_RELEASE_COMMIT="$commit"
+    SHIPPED_TAG="$tag"
+}
+
+# Resume a release that find_merged_release found: fast-forward the base branch
+# to origin's, which find_merged_release fetched and which carries the merge, so
+# git_tag_version can push it with the tag. Sets RELEASE_PR_NUMBER (and
+# RELEASE_PR_URL) when the merge subject names the PR.
+resume_merged_release() {
+    local commit="$1" subject re=' - PR #([0-9]+)$'
+    step_start merge
+    RELEASE_PR_MERGED=true
+    subject=$(git log -1 --format=%s "$commit")
+    if [[ "$subject" =~ $re ]]; then
+        RELEASE_PR_NUMBER="${BASH_REMATCH[1]}"
+        RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
+    fi
+    git_quiet checkout "$BASE_BRANCH"
+    git_quiet merge --ff-only "origin/$BASE_BRANCH"
+    print_row merge "${RELEASE_PR_NUMBER:+#$RELEASE_PR_NUMBER }merged into $BASE_BRANCH earlier (${commit:0:7}); resuming"
     step_done
 }
 
@@ -1463,8 +1592,464 @@ json_set_pr_field() {
     fi
 }
 
+# ------------------------------------------------------------------------------
+# Preflight
+#
+# release_preflight checks everything a phase needs before the run commits,
+# pushes, merges, or tags anything, so a release that could not finish stops
+# with nothing changed. A failed check is recorded with preflight_fail instead
+# of exiting, and preflight_report prints every failure at once. A check whose
+# input an earlier failure leaves unknown is skipped: the version on the wrong
+# branch, the PR when gh is not authenticated.
+
+# Record a failed check: the error, its hints (newline-separated), and the
+# output of the command that failed, printed under the error.
+# Usage: preflight_fail <error> [hints] [output]
+preflight_fail() {
+    PREFLIGHT_ERRORS+=("$1")
+    PREFLIGHT_HINTS+=("${2:-}")
+    PREFLIGHT_OUTPUT+=("${3:-}")
+}
+
+# Print every recorded failure with its output and hints, then exit 1. Returns
+# when nothing failed.
+preflight_report() {
+    [[ ${#PREFLIGHT_ERRORS[@]} -eq 0 ]] && return 0
+    local i hint
+    for ((i = 0; i < ${#PREFLIGHT_ERRORS[@]}; i++)); do
+        print_error "${PREFLIGHT_ERRORS[i]}"
+        print_output "${PREFLIGHT_OUTPUT[i]}"
+        while IFS= read -r hint; do
+            [[ -n "$hint" ]] && print_hint "$hint"
+        done <<< "${PREFLIGHT_HINTS[i]}"
+    done
+    exit 1
+}
+
+# Succeed when version $1 sorts below version $2. Both are semver with an
+# optional alpha suffix or LaTeX versions of 1 to 3 components: a missing
+# component counts as 0, and a prerelease sorts below its release.
+version_lt() {
+    local a_pre="" b_pre="" i x y
+    [[ "$1" == *a* ]] && a_pre="${1#*a}"
+    [[ "$2" == *a* ]] && b_pre="${2#*a}"
+    local IFS=.
+    local a=(${1%%a*}) b=(${2%%a*})
+    for i in 0 1 2; do
+        x=$((10#${a[i]:-0}))
+        y=$((10#${b[i]:-0}))
+        if [[ $x -lt $y ]]; then return 0; fi
+        if [[ $x -gt $y ]]; then return 1; fi
+    done
+    [[ -n "$a_pre" ]] || return 1
+    [[ -z "$b_pre" ]] && return 0
+    [[ $((10#$a_pre)) -lt $((10#$b_pre)) ]]
+}
+
+# Print the highest version tag among tag names on stdin, one per line; a tag
+# counts when it is v followed by a version of the project's form: LaTeX for
+# <project_type> latex, semver otherwise, so a floating major tag (v1) or a
+# date tag does not count in a semver project. Prints nothing when none does.
+# Usage: latest_version_tag <project_type>
+latest_version_tag() {
+    local tag best="" valid=is_valid_version_string
+    [[ "$1" == "latex" ]] && valid=is_valid_latex_version_string
+    while IFS= read -r tag; do
+        [[ "$tag" == v* ]] || continue
+        tag="${tag#v}"
+        "$valid" "$tag" || continue
+        if [[ -z "$best" ]] || version_lt "$best" "$tag"; then
+            best="$tag"
+        fi
+    done
+    if [[ -n "$best" ]]; then echo "v$best"; fi
+}
+
+# Record a failure unless <branch> is level with origin/<branch>, after
+# fetching it. With ahead_ok true, a branch only ahead of origin's passes too.
+# Usage: preflight_branch_level <branch> [ahead_ok]
+preflight_branch_level() {
+    local branch="$1" ahead_ok="${2:-false}" out counts ahead behind hint
+    if ! out=$(git_net fetch origin "$branch" 2>&1); then
+        preflight_fail "Could not fetch from origin/$branch" "" "$out"
+        return 0
+    fi
+    counts=$(git rev-list --left-right --count "$branch...origin/$branch" 2>/dev/null) || counts="0 0"
+    read -r ahead behind <<< "$counts"
+    if [[ "$behind" -eq 0 && ( "$ahead" -eq 0 || "$ahead_ok" == "true" ) ]]; then
+        return 0
+    fi
+    if [[ "$behind" -eq 0 ]]; then
+        hint="push it first: git push origin $branch"
+    elif [[ "$ahead" -eq 0 ]]; then
+        hint="pull first: git pull origin $branch"
+    else
+        hint="reconcile them first: git pull --rebase origin $branch"
+    fi
+    preflight_fail "$branch is not level with origin/$branch ($ahead ahead, $behind behind)" "$hint"
+}
+
+# For a merge without a PR: record a failure when the local base branch and
+# origin's have diverged, after fetching it. The merge step pulls the base with
+# --ff-only, which would refuse only after the bump is pushed. A clone with no
+# local base branch passes: the checkout creates it from origin's.
+preflight_base_fast_forward() {
+    local out
+    git rev-parse -q --verify "refs/heads/$BASE_BRANCH" >/dev/null || return 0
+    if ! out=$(git_net fetch origin "$BASE_BRANCH" 2>&1); then
+        preflight_fail "Could not fetch from origin/$BASE_BRANCH" "" "$out"
+        return 0
+    fi
+    if git merge-base --is-ancestor "origin/$BASE_BRANCH" "$BASE_BRANCH" ||
+        git merge-base --is-ancestor "$BASE_BRANCH" "origin/$BASE_BRANCH"; then
+        return 0
+    fi
+    preflight_fail "$BASE_BRANCH has diverged from origin/$BASE_BRANCH; the merge without a PR cannot fast-forward it" \
+        "reconcile them first (git log --oneline --left-right $BASE_BRANCH...origin/$BASE_BRANCH shows both sides)"
+}
+
+# Read the base branch and the version tags on origin in one call into
+# REMOTE_TAGS (tag names, one per line). Records a failure when origin cannot
+# be read, or, for a release that merges into it, has no base branch, or (for
+# a merge without a PR) a base branch the local one has diverged from.
+REMOTE_TAGS=""
+preflight_remote_refs() {
+    local out
+    REMOTE_TAGS=""
+    if ! out=$(git_net ls-remote origin "refs/heads/$BASE_BRANCH" 'refs/tags/v*' 2>&1); then
+        preflight_fail "could not read the branches and tags on origin" "" "$out"
+        return 0
+    fi
+    REMOTE_TAGS=$(printf '%s\n' "$out" | awk '$2 ~ /^refs\/tags\// && $2 !~ /\^\{\}$/ { sub(/^refs\/tags\//, "", $2); print $2 }')
+    [[ "$BUMP_TYPE" == "prerelease" ]] && return 0
+    if ! printf '%s\n' "$out" | awk -v ref="refs/heads/$BASE_BRANCH" '$2 == ref { found = 1 } END { exit !found }'; then
+        preflight_fail "origin has no $BASE_BRANCH branch to release into" \
+            "push it first: git push -u origin $BASE_BRANCH"
+    elif [[ "$NO_PR" == "true" && "$PHASE" != "pr" ]]; then
+        preflight_base_fast_forward
+    fi
+}
+
+# For 'release merge' through a PR: resolve the PR (the pinned number, or the
+# one open dev->base PR) into MERGE_PR_NUMBER, and check that merging it ships
+# this release: it is open, targets the base branch, its head is local dev's
+# head (so no unreviewed commit rides along), and its title is the tag.
+preflight_merge_pr() {
+    local tag="$1" pr="$MERGE_PR_NUMBER" count info head base state title dev_head
+    if [[ -z "$pr" ]]; then
+        count=$(gh pr list --base "$BASE_BRANCH" --head dev --state open --json number --jq 'length' 2>/dev/null || echo 0)
+        if [[ "$count" -gt 1 ]]; then
+            preflight_fail "Multiple open dev->$BASE_BRANCH PRs ($count); target is ambiguous" \
+                "pin one: stanza release merge <pr-number>"
+            return 0
+        fi
+        pr=$(gh_get_last_open_pr_number 2>/dev/null) || pr=""
+        if [[ -z "$pr" ]]; then
+            preflight_fail "No open PR from dev to $BASE_BRANCH to merge" \
+                "run 'stanza release pr <type>' first"
+            return 0
+        fi
+    fi
+    MERGE_PR_NUMBER="$pr"
+
+    info=$(gh pr view "$pr" --json headRefOid,baseRefName,state \
+        --jq '[.headRefOid, .baseRefName, .state] | join("|")' 2>/dev/null) || info=""
+    IFS='|' read -r head base state <<< "$info"
+    dev_head=$(git rev-parse -q --verify dev 2>/dev/null) || dev_head=""
+    if [[ -z "$head" || -z "$dev_head" ]]; then
+        preflight_fail "Could not verify PR #$pr head against dev" \
+            "check GitHub access and the local dev branch, then retry"
+        return 0
+    fi
+    if [[ "$state" != "OPEN" || "$base" != "$BASE_BRANCH" ]]; then
+        preflight_fail "PR #$pr must be OPEN and target $BASE_BRANCH" \
+            "select the open release PR from dev to $BASE_BRANCH"
+    elif [[ "$head" != "$dev_head" ]]; then
+        preflight_fail "dev has advanced past PR #$pr head; merge would ship unreviewed commits" \
+            "re-run 'stanza release pr <type>' to refresh the PR"
+    fi
+    title=$(gh pr view "$pr" --json title --jq '.title' 2>/dev/null) || title=""
+    if [[ "$title" != "$tag" ]]; then
+        preflight_fail "PR #$pr title does not match $tag" \
+            "PR title must be the release tag: $tag"
+    fi
+}
+
+# Find a stable bump that an earlier 'release <type>' or 'release pr <type>'
+# run committed on dev and did not release: dev's last commit is the bump to
+# the version dev is on, and that version is tagged neither in this clone nor
+# on origin. The run then resumes at the push and the PR instead of bumping
+# again. Sets BUMP_RESUMED_TYPE to the bump's type and returns 0 when found.
+# Part of release_preflight: an unreadable origin is recorded with
+# preflight_fail and returns 1.
+BUMP_RESUMED_TYPE=""
+find_unfinished_bump() {
+    local subject out re='^version \[(patch|minor|major)\]: (.+)$'
+    BUMP_RESUMED_TYPE=""
+    subject=$(git log -1 --format=%s 2>/dev/null) || return 1
+    [[ "$subject" =~ $re ]] || return 1
+    [[ "${BASH_REMATCH[2]}" == "$CURRENT_VERSION" ]] || return 1
+    BUMP_RESUMED_TYPE="${BASH_REMATCH[1]}"
+    if git rev-parse -q --verify "refs/tags/v$CURRENT_VERSION" >/dev/null; then
+        BUMP_RESUMED_TYPE=""
+        return 1
+    fi
+    if ! should_skip_remote; then
+        if ! out=$(git_net ls-remote --tags origin "refs/tags/v$CURRENT_VERSION" 2>&1); then
+            BUMP_RESUMED_TYPE=""
+            preflight_fail "could not read tag v$CURRENT_VERSION from origin" "" "$out"
+            return 1
+        fi
+        if [[ -n "$out" ]]; then
+            BUMP_RESUMED_TYPE=""
+            return 1
+        fi
+    fi
+}
+
+# For a run that resumes an unfinished bump against the remote: record a
+# failure when dev's head is already merged into origin's base branch, which the
+# merge phase finishes. Through a PR, also take the release PR an earlier run
+# opened into RESUME_PR_NUMBER, after checking that its title is the tag.
+# Usage: preflight_resumed_bump <tag> <gh_ok>
+RESUME_PR_NUMBER=""
+preflight_resumed_bump() {
+    local tag="$1" gh_ok="$2" out pr title merge_cmd="stanza release merge"
+    should_skip_remote && return 0
+    [[ "$NO_PR" == "true" ]] && merge_cmd="$merge_cmd --no-pr"
+    if ! out=$(git_net fetch origin "$BASE_BRANCH" 2>&1); then
+        preflight_fail "Could not fetch from origin/$BASE_BRANCH" "" "$out"
+        return 0
+    fi
+    if git merge-base --is-ancestor dev "origin/$BASE_BRANCH"; then
+        preflight_fail "$tag is already merged into $BASE_BRANCH, untagged" \
+            "finish it: $merge_cmd"
+        return 0
+    fi
+    release_uses_pr || return 0
+    [[ "$gh_ok" == "true" ]] || return 0
+    pr=$(gh_get_last_open_pr_number 2>/dev/null) || pr=""
+    [[ -n "$pr" ]] || return 0
+    title=$(gh pr view "$pr" --json title --jq '.title' 2>/dev/null) || title=""
+    if [[ "$title" != "$tag" ]]; then
+        preflight_fail "PR #$pr is open from dev to $BASE_BRANCH with the title '$title', not $tag" \
+            "close it, or retitle it $tag, then re-run"
+        return 0
+    fi
+    RESUME_PR_NUMBER="$pr"
+}
+
+# Run every check the phase needs and report the failures together (exit 1),
+# or return when the release can go ahead. Sets RELEASE_TARGET, the version
+# the run ships; for full and pr, BUMP_RESUMED when dev carries an unfinished
+# bump (find_unfinished_bump); for merge, RELEASE_RESUMED and SHIPPED_TAG when
+# an earlier run merged the release (find_shipped_release,
+# find_merged_release), and MERGE_PR_NUMBER.
+RELEASE_TARGET=""
+RELEASE_RESUMED=false
+BUMP_RESUMED=false
+release_preflight() {
+    local on_branch=true gh_ok=true tag="" tags latest where errors_before
+
+    # The branch and the working tree
+    if [[ "$BUMP_TYPE" == "prerelease" ]]; then
+        if [[ "$CURRENT_BRANCH" == "main" || "$CURRENT_BRANCH" == "master" ]]; then
+            preflight_fail "Prerelease versions cannot be bumped on protected branch: $CURRENT_BRANCH" \
+                "switch to a development or feature branch"
+            on_branch=false
+        fi
+    elif [[ "$CURRENT_BRANCH" != "dev" ]]; then
+        preflight_fail "This operation should be performed on dev branch" \
+            "current branch is ${CURRENT_BRANCH:-a detached HEAD}: git checkout dev"
+        on_branch=false
+    fi
+    if has_uncommitted_changes; then
+        preflight_fail "Uncommitted changes, commit or stash them first." "" "$(git status --porcelain)"
+    fi
+
+    # gh, which the PR path calls for the PR, its checks, and the merge
+    if [[ "$BUMP_TYPE" != "prerelease" ]] && release_uses_pr && ! gh auth status >/dev/null 2>&1; then
+        gh_ok=false
+        preflight_fail "GitHub CLI is not authenticated" \
+            "authenticate: gh auth login"$'\n'"or release without GitHub: stanza release $CMD_LABEL --local"
+    fi
+
+    # The version the run ships, read from the branch it runs on
+    if [[ "$on_branch" == "true" ]]; then
+        if [[ "$BUMP_TYPE" == "prerelease" && "$PROJECT_TYPE_DETECTED" == "latex" ]]; then
+            preflight_fail "LaTeX projects don't support prerelease bumps" \
+                "use 'stanza release patch|minor|major' instead"
+        elif [[ "$PROJECT_TYPE_DETECTED" == "latex" ]] && ! is_valid_latex_version_string "$CURRENT_VERSION"; then
+            preflight_fail "Invalid LaTeX version string: $CURRENT_VERSION"
+        elif [[ "$PROJECT_TYPE_DETECTED" != "latex" ]] && ! is_valid_version_string "$CURRENT_VERSION"; then
+            preflight_fail "Invalid version string: $CURRENT_VERSION" \
+                "versions are major.minor.patch with an optional aN suffix, without leading zeros"
+        elif [[ "$PHASE" == "merge" ]]; then
+            RELEASE_TARGET="$CURRENT_VERSION"
+        elif [[ "$BUMP_TYPE" != "prerelease" ]] && find_unfinished_bump; then
+            RELEASE_TARGET="$CURRENT_VERSION"
+            BUMP_RESUMED=true
+            if [[ "$BUMP_RESUMED_TYPE" != "$BUMP_TYPE" ]]; then
+                local resume_label="$BUMP_RESUMED_TYPE"
+                [[ "$PHASE" == "pr" ]] && resume_label="pr $resume_label"
+                [[ "$YES_TO_ALL" == "true" ]] && resume_label="$resume_label -y"
+                preflight_fail "dev already carries an unreleased $BUMP_RESUMED_TYPE bump to $CURRENT_VERSION; not bumping again" \
+                    "resume it: stanza release $resume_label"$'\n'"or, to release another version, remove that bump commit from dev first"
+            fi
+        elif [[ "$PROJECT_TYPE_DETECTED" == "latex" ]]; then
+            RELEASE_TARGET=$(bump_latex_version_string "$CURRENT_VERSION" "$BUMP_TYPE")
+        else
+            RELEASE_TARGET=$(bump_version_string "$CURRENT_VERSION" "$BUMP_TYPE")
+        fi
+    fi
+    if [[ -n "$RELEASE_TARGET" ]]; then
+        tag="v$RELEASE_TARGET"
+    fi
+
+    # merge: a release an earlier run merged and tagged, or merged on origin
+    # without tagging, is resumed instead, and needs nothing below. A failure
+    # to tell leaves the rest unknown.
+    if [[ "$PHASE" == "merge" && -n "$tag" ]]; then
+        errors_before=${#PREFLIGHT_ERRORS[@]}
+        if find_shipped_release; then
+            RELEASE_RESUMED=true
+        elif [[ ${#PREFLIGHT_ERRORS[@]} -eq $errors_before && "$RELEASE_TARGET" != *a* ]] &&
+            find_merged_release "$tag"; then
+            RELEASE_RESUMED=true
+        fi
+        if [[ "$RELEASE_RESUMED" == "true" || ${#PREFLIGHT_ERRORS[@]} -gt $errors_before ]]; then
+            preflight_report
+            return 0
+        fi
+    fi
+
+    # The branch the run pushes is level with origin. A merge through a PR
+    # checks the PR's head against dev instead.
+    if ! should_skip_remote; then
+        if [[ "$BUMP_TYPE" == "prerelease" ]]; then
+            if [[ -n "$CURRENT_BRANCH" ]]; then
+                preflight_branch_level "$CURRENT_BRANCH"
+            fi
+        elif [[ "$PHASE" != "merge" ]] || ! release_uses_pr; then
+            # A resumed bump may not be pushed yet.
+            preflight_branch_level dev "$BUMP_RESUMED"
+        fi
+    fi
+
+    # full and pr: what the stable bump needs, or what resuming one needs
+    if [[ "$BUMP_RESUMED" == "true" ]]; then
+        preflight_resumed_bump "$tag" "$gh_ok"
+    elif [[ "$BUMP_TYPE" != "prerelease" && "$PHASE" != "merge" ]]; then
+        if [[ "$on_branch" == "true" && "$NO_CHANGELOG" != "true" &&
+            "$(changelog_unreleased_status)" == "empty" ]]; then
+            preflight_fail "CHANGELOG.md [Unreleased] is empty; add entries before releasing" \
+                "fill ## [Unreleased], or pass --no-changelog to skip changelog promotion"
+        fi
+        if [[ "$on_branch" == "true" && "$gh_ok" == "true" ]]; then
+            check_dev_ci_before_bump
+        fi
+    fi
+
+    # merge: what it merges
+    if [[ "$PHASE" == "merge" && -n "$tag" ]]; then
+        if release_uses_pr; then
+            if [[ "$gh_ok" == "true" ]]; then
+                preflight_merge_pr "$tag"
+            fi
+        elif [[ "$RELEASE_TARGET" == *a* ]]; then
+            # A direct merge cannot tell whether a pr phase promoted the version.
+            preflight_fail "refusing to tag a prerelease (alpha) on $BASE_BRANCH" \
+                "promote first (stanza release pr patch) or run a full release"
+        fi
+    fi
+
+    # The tag: free in this clone and on origin, and above the latest version
+    # tag in either. A prerelease is not tagged, but must still sort above the
+    # last one.
+    if [[ -n "$tag" ]]; then
+        tags=$(git tag -l 'v*')
+        where=""
+        if printf '%s\n' "$tags" | grep -qxF "$tag"; then
+            where="in this clone"
+        fi
+        if ! should_skip_remote; then
+            preflight_remote_refs
+            tags="$tags"$'\n'"$REMOTE_TAGS"
+            if printf '%s\n' "$REMOTE_TAGS" | grep -qxF "$tag"; then
+                where="${where:+$where and }on origin"
+            fi
+        fi
+        if [[ "$BUMP_TYPE" != "prerelease" && -n "$where" ]]; then
+            preflight_fail "tag $tag already exists $where" \
+                "inspect it (git show $tag); release a higher version, or delete the tag if it is stale"
+        fi
+        latest=$(printf '%s\n' "$tags" | latest_version_tag "$PROJECT_TYPE_DETECTED")
+        if [[ -n "$latest" ]] && version_lt "$RELEASE_TARGET" "${latest#v}"; then
+            preflight_fail "$tag is lower than the latest tag $latest" \
+                "set dev's version above ${latest#v} first"
+        fi
+    fi
+
+    preflight_report
+}
+
+# --check: report that the release can go ahead and what it would do.
+report_check_passed() {
+    local summary
+    if [[ -n "$MERGED_RELEASE_COMMIT" ]]; then
+        summary="would resume $SHIPPED_TAG: tag its merge ${MERGED_RELEASE_COMMIT:0:7} on $BASE_BRANCH"
+    elif [[ "$RELEASE_RESUMED" == "true" ]]; then
+        summary="would resume $SHIPPED_TAG"
+    elif [[ "$BUMP_TYPE" == "prerelease" ]]; then
+        summary="would bump $CURRENT_VERSION -> $RELEASE_TARGET on $CURRENT_BRANCH"
+    elif [[ "$PHASE" == "merge" ]]; then
+        summary="would merge and tag v$RELEASE_TARGET"
+        [[ -n "$MERGE_PR_NUMBER" ]] && summary="$summary from PR #$MERGE_PR_NUMBER"
+    elif [[ "$BUMP_RESUMED" == "true" ]]; then
+        summary="would resume the $BUMP_TYPE bump to $RELEASE_TARGET already on dev"
+        if [[ -n "$RESUME_PR_NUMBER" ]]; then
+            summary="$summary, with PR #$RESUME_PR_NUMBER"
+        elif [[ "$PHASE" == "pr" ]] && ! should_skip_remote; then
+            summary="$summary and open its PR"
+        fi
+        [[ "$PHASE" == "full" ]] && summary="$summary, and release v$RELEASE_TARGET"
+    elif [[ "$PHASE" == "pr" ]]; then
+        summary="would bump $CURRENT_VERSION -> $RELEASE_TARGET and open its PR"
+    else
+        summary="would release $CURRENT_VERSION -> v$RELEASE_TARGET"
+    fi
+    print_row check "passed; $summary"
+
+    json_set command "release"
+    [[ "$PHASE" != "full" ]] && json_set phase "$PHASE"
+    json_set_raw ok true
+    json_set_raw check true
+    json_set_or_null bump_type "$BUMP_TYPE"
+    json_set project_type "$PROJECT_TYPE_DETECTED"
+    json_set from_version "$CURRENT_VERSION"
+    if [[ "$RELEASE_RESUMED" == "true" ]]; then
+        json_set to_version "${SHIPPED_TAG#v}"
+        json_set tag "$SHIPPED_TAG"
+    else
+        json_set to_version "$RELEASE_TARGET"
+        if [[ "$BUMP_TYPE" == "prerelease" ]]; then
+            json_set_raw tag null
+        else
+            json_set tag "v$RELEASE_TARGET"
+        fi
+    fi
+    if [[ "$PHASE" == "merge" ]]; then
+        json_set_raw resumed "$RELEASE_RESUMED"
+        json_set_raw pr "${MERGE_PR_NUMBER:-null}"
+    elif [[ "$BUMP_TYPE" != "prerelease" ]]; then
+        json_set_raw resumed "$BUMP_RESUMED"
+    fi
+    json_emit
+    print_done "preflight passed; nothing changed"
+}
+
 # Prerequisites checks. gh is needed only where the PR path calls it, the
-# same condition as the auth check below.
+# same condition as the auth check in release_preflight.
 if [[ "$BUMP_TYPE" != "prerelease" ]] && release_uses_pr; then
     check_required_commands
 else
@@ -1472,30 +2057,18 @@ else
 fi
 check_git_remote_status
 
-# For prerelease: ensure not on protected branch
+RELEASE_PR_NUMBER=""
+RELEASE_PR_URL=""
+
+release_preflight
+if [[ "$CHECK_ONLY" == "true" ]]; then
+    report_check_passed
+    exit 0
+fi
+
 if [[ "$BUMP_TYPE" == "prerelease" ]]; then
     handle_prerelease_workflow
 fi
-
-# For non-prerelease releases, check GitHub authentication (a --no-pr full or
-# merge run makes no gh calls)
-if [[ "$BUMP_TYPE" != "prerelease" ]] && release_uses_pr; then
-    if ! gh auth status &>/dev/null; then
-        print_error "GitHub CLI is not authenticated"
-        {
-            echo ""
-            echo "Please authenticate with GitHub:"
-            echo "  gh auth login"
-            echo ""
-            echo "Or run in local-only mode:"
-            echo "  stanza release $CMD_LABEL --local"
-        } >&2
-        exit 1
-    fi
-fi
-
-RELEASE_PR_NUMBER=""
-RELEASE_PR_URL=""
 
 case "$PHASE" in
     full)
@@ -1516,9 +2089,10 @@ case "$PHASE" in
         # JSON output (stdout, suppresses human banner via JSON_OUTPUT gating)
         json_set command "release"
         json_set_raw ok true
+        json_set_raw resumed "$BUMP_RESUMED"
         json_set bump_type "$BUMP_TYPE"
         json_set project_type "$PROJECT_TYPE_DETECTED"
-        json_set from_version "$RELEASE_FROM_VERSION"
+        json_set_or_null from_version "$RELEASE_FROM_VERSION"
         json_set to_version "$RELEASE_TO_VERSION"
         json_set branch_from "dev"
         json_set branch_to "$BASE_BRANCH"
@@ -1557,9 +2131,10 @@ case "$PHASE" in
         json_set command "release"
         json_set phase "pr"
         json_set_raw ok true
+        json_set_raw resumed "$BUMP_RESUMED"
         json_set bump_type "$BUMP_TYPE"
         json_set project_type "$PROJECT_TYPE_DETECTED"
-        json_set from_version "$RELEASE_FROM_VERSION"
+        json_set_or_null from_version "$RELEASE_FROM_VERSION"
         json_set to_version "$RELEASE_TO_VERSION"
         json_set branch_from "dev"
         json_set branch_to "$BASE_BRANCH"
@@ -1583,46 +2158,22 @@ case "$PHASE" in
 
     merge)
         # Phase 2: merge the open PR (or merge dev directly), tag, new cycle.
-        require_branch "dev"
-        check_uncommitted_changes
-        version_tag="v$(get_current_version)"
-        if [[ "$PROJECT_TYPE_DETECTED" == "latex" ]]; then
-            validate_latex_version_string "${version_tag#v}"
-        else
-            validate_version_string "${version_tag#v}"
-        fi
-        RELEASE_RESUMED=false
-        if find_shipped_release; then
+        if [[ -n "$MERGED_RELEASE_COMMIT" ]]; then
+            # An earlier run merged this release on origin and stopped before
+            # tagging it: tag that merge, then the dev cycle.
+            version_tag="$SHIPPED_TAG"
+            resume_merged_release "$MERGED_RELEASE_COMMIT"
+            git_tag_version "$version_tag" "$MERGED_RELEASE_COMMIT"
+        elif [[ "$RELEASE_RESUMED" == "true" ]]; then
             # An earlier run merged and tagged this release and stopped before
             # finishing: skip to the tag push and the dev cycle.
             version_tag="$SHIPPED_TAG"
-            RELEASE_RESUMED=true
             resume_shipped_release "$version_tag"
         else
+            version_tag="v$RELEASE_TARGET"
             if release_uses_pr; then
-                # The release PR title must agree with the version on dev.
-                _merge_pr="${MERGE_PR_NUMBER:-$(gh_get_last_open_pr_number)}"
-                if [[ -n "$_merge_pr" ]]; then
-                    pr_title=$(gh pr view "$_merge_pr" --json title --jq '.title' 2>/dev/null || true)
-                    if [[ "$pr_title" != "$version_tag" ]]; then
-                        print_error "PR #$_merge_pr title does not match $version_tag" \
-                            "PR title must be the release tag: $version_tag"
-                        exit 1
-                    fi
-                fi
                 gh_merge_pr "$version_tag" "$MERGE_PR_NUMBER"
             else
-                # A direct merge cannot tell whether a pr phase promoted the version;
-                # refuse to tag a prerelease (alpha) on the base branch.
-                if [[ "$(get_current_version)" == *a* ]]; then
-                    print_error "refusing to tag a prerelease (alpha) on $BASE_BRANCH" \
-                        "promote first (stanza release pr patch) or run a full release"
-                    exit 1
-                fi
-                # --no-pr merges the local dev; it must match what the pr phase pushed.
-                if ! should_skip_remote; then
-                    check_branch_up_to_date "dev"
-                fi
                 git_merge_dev_into_main "$version_tag"
             fi
             git_tag_version "$version_tag"

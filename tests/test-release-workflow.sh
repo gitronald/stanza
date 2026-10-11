@@ -132,7 +132,8 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 # "<bucket>\t<name>" form stanza's --jq asks for. No file, or one that reads
 # NONE, is gh's "no checks reported" error. `gh run list` does the same with
 # runs.N ("<status>\t<conclusion>\t<workflow>" lines; no file prints nothing)
-# and records each --commit it was asked about in runs_commits.
+# and records each --commit it was asked about in runs_commits. An auth_fail
+# file makes `gh auth status` fail.
 make_gh_mock() {
     local bindir="$1"
     mkdir -p "$bindir"
@@ -153,7 +154,7 @@ scripted() {
 }
 cmd="$1"; shift || true
 case "$cmd" in
-  auth) exit 0 ;;
+  auth) [[ ! -f "$STATE/auth_fail" ]] || { echo "You are not logged into any GitHub hosts" >&2; exit 1; } ;;
   run)
     [[ "${1:-}" == list ]] || exit 0
     shift
@@ -840,25 +841,49 @@ test_no_pr_merge_phase_protected_skips_pr_create() {
     teardown_remote_repo
 }
 
-test_no_pr_diverged_base_hint() {
+test_no_pr_diverged_base_refused() {
     echo ""
-    echo "--no-pr with a diverged base branch: the hint returns to dev first"
-    setup_remote_repo
+    echo "--no-pr with a diverged base branch: refused before the bump"
+    local phase err exit_code
+    for phase in full merge; do
+        setup_remote_repo
+        # merge: a pr phase has promoted dev to the release version.
+        if [[ "$phase" == merge ]]; then
+            echo "0.1.0" > VERSION
+            git commit -q -am "version [patch]: 0.1.0"
+            git push -q origin dev
+        fi
 
+        git checkout -q main
+        git commit -q --allow-empty -m "local only"
+        git checkout -q -b remote-side origin/main
+        git commit -q --allow-empty -m "remote only"
+        git push -q origin remote-side:main
+        git checkout -q dev
+        git branch -q -D remote-side
+        preflight_snapshot
+
+        local args=(release patch -y --no-pr)
+        [[ "$phase" == merge ]] && args=(release merge -y --no-pr)
+        exit_code=0
+        err=$(NO_COLOR=1 "$STANZA" "${args[@]}" 2>&1) || exit_code=$?
+        assert_eq "$phase: exits non-zero" "1" "$exit_code"
+        assert_contains "$phase: names the divergence" "$err" \
+            "main has diverged from origin/main"
+        assert_contains "$phase: shows how to compare" "$err" \
+            "git log --oneline --left-right main...origin/main"
+        preflight_unchanged "$phase, diverged base"
+        teardown_remote_repo
+    done
+
+    # A local base ahead of origin's still fast-forwards (the pull is a no-op).
+    setup_remote_repo
     git checkout -q main
     git commit -q --allow-empty -m "local only"
-    git checkout -q -b remote-side origin/main
-    git commit -q --allow-empty -m "remote only"
-    git push -q origin remote-side:main
     git checkout -q dev
-    git branch -q -D remote-side
-
-    local err exit_code=0
-    err=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || exit_code=$?
-    assert_eq "exits non-zero" "1" "$exit_code"
-    assert_contains "hint checks out dev before the merge phase" "$err" \
-        "git checkout dev && stanza release merge --no-pr"
-
+    exit_code=0
+    NO_COLOR=1 "$STANZA" release patch --no-pr --check >/dev/null 2>&1 || exit_code=$?
+    assert_eq "base ahead of origin: check passes" "0" "$exit_code"
     teardown_remote_repo
 }
 
@@ -1151,6 +1176,339 @@ test_local_cycle_resume() {
     cleanup
 }
 
+# --- Earlier steps resumed (plan 007) --------------------------------------
+
+# The sha of <ref> on the bare remote, or empty.
+remote_sha() {
+    git --git-dir="$TEST_TMPDIR/remote.git" rev-parse -q --verify "$1" 2>/dev/null || true
+}
+
+test_local_release_finished_remotely() {
+    echo ""
+    echo "A --local release finished against the remote pushes main with the tag"
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --local --no-dev-cycle >/dev/null 2>&1
+    git checkout -q dev
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "pushes main with the tag" "$out" "v0.1.0  pushed with main (resumed)"
+    assert_eq "release merge on origin/main" "$(git rev-parse main)" "$(remote_sha main)"
+    assert_eq "tag on origin" "$(git rev-parse v0.1.0)" "$(remote_sha v0.1.0)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "dev cycle pushed" "$(git rev-parse dev)" "$(remote_sha dev)"
+    teardown_remote_repo
+
+    # The local release also ran its dev cycle: the resume pushes the rest.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --local >/dev/null 2>&1
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "cycled: resume exits 0" "0" "$code"
+    assert_contains "cycled: pushes main with the tag" "$out" "v0.1.0  pushed with main (resumed)"
+    assert_contains "cycled: pushes the advanced dev" "$out" "0.1.1a0 on dev (already advanced, pushed)"
+    assert_eq "cycled: tag on origin" "$(git rev-parse v0.1.0)" "$(remote_sha v0.1.0)"
+    assert_eq "cycled: dev pushed" "$(git rev-parse dev)" "$(remote_sha dev)"
+    teardown_remote_repo
+
+    # origin/main moved on meanwhile: refuse, push nothing.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --local --no-dev-cycle >/dev/null 2>&1
+    git checkout -q -b hotfix origin/main
+    git commit -q --allow-empty -m "hotfix"
+    git push -q origin hotfix:main
+    git checkout -q dev
+    git branch -q -D hotfix
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "diverged: exits 1" "1" "$code"
+    assert_contains "diverged: says so" "$out" "main has diverged from origin/main; not resuming"
+    assert_not_contains "diverged: no fetch error" "$out" "non-fast-forward"
+    assert_eq "diverged: tag not pushed" "" "$(remote_sha v0.1.0)"
+    teardown_remote_repo
+
+    # main gained a commit after the local release: not pushed along with it.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --local --no-dev-cycle >/dev/null 2>&1
+    git commit -q --allow-empty -m "unreleased"
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "ahead: exits 1" "1" "$code"
+    assert_contains "ahead: names the extra commits" "$out" "main has commits after v0.1.0 that origin/main lacks"
+    assert_eq "ahead: main not pushed" "$(git rev-parse origin/main)" "$(remote_sha main)"
+    teardown_remote_repo
+}
+
+test_merged_release_resumes_tag() {
+    echo ""
+    echo "A merge step that stops after the PR merged: release merge tags the merge"
+    setup_remote_repo
+    local old_main work="$PWD"
+    old_main=$(git rev-parse main)
+    # Once the PR merge reaches origin's main, fetches fail; pushes still work.
+    cat > "$TEST_TMPDIR/remote.git/hooks/post-receive" <<HOOK
+#!/bin/bash
+grep -q ' refs/heads/main$' || exit 0
+unset GIT_DIR GIT_WORK_TREE
+git --git-dir="$work/.git" config remote.origin.pushurl "$TEST_TMPDIR/remote.git"
+git --git-dir="$work/.git" config remote.origin.url "$TEST_TMPDIR/missing.git"
+HOOK
+    chmod +x "$TEST_TMPDIR/remote.git/hooks/post-receive"
+
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "release exits 1" "1" "$code"
+    assert_contains "names the failed pull" "$out" "git pull origin main failed"
+    assert_contains "says the PR is merged" "$out" "merge   failed; PR #1 is merged; v0.1.0 is not tagged"
+    assert_contains "resume is release merge" "$out" "resume: git checkout dev && stanza release merge -y"
+    assert_not_contains "no tagging by hand" "$out" "git tag v0.1.0"
+    assert_eq "not tagged" "" "$(git tag -l v0.1.0)"
+
+    # The network is back. A real gh pr merge leaves local main behind.
+    rm "$TEST_TMPDIR/remote.git/hooks/post-receive"
+    git config --unset remote.origin.pushurl
+    git config remote.origin.url "$TEST_TMPDIR/remote.git"
+    git checkout -q dev
+    git branch -f main "$old_main"
+
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y --check 2>&1) || code=$?
+    assert_eq "check exits 0" "0" "$code"
+    assert_contains "check reports the resume" "$out" "would resume v0.1.0: tag its merge"
+
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume finds the merge" "$out" "#1 merged into main earlier ("
+    assert_contains "resume tags it" "$out" "v0.1.0  pushed"
+    assert_eq "tag is the PR merge" "version [release]: v0.1.0 - PR #1" \
+        "$(git log -1 --format=%s v0.1.0 2>/dev/null)"
+    assert_eq "tag on origin" "$(remote_sha main)" "$(remote_sha v0.1.0)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "dev cycle pushed" "$(git rev-parse dev)" "$(remote_sha dev)"
+
+    local json
+    json=$(NO_COLOR=1 "$STANZA" --json release merge -y 2>/dev/null) || true
+    assert_contains "a second resume has nothing to tag" "$json" '"resumed":true'
+    teardown_remote_repo
+}
+
+test_merged_release_refusals() {
+    echo ""
+    echo "dev already on origin/main without a matching merge: not tagged"
+    # main carries a commit dev lacks, so the PR merge's tree is not dev's.
+    setup_remote_repo
+    git checkout -q main
+    echo fix > hotfix.txt
+    git add hotfix.txt
+    git commit -q -m "hotfix"
+    git push -q origin main
+    git checkout -q dev
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    gh pr merge 1 --merge --subject "version [release]: v0.1.0 - PR #1" >/dev/null 2>&1
+    git checkout -q dev
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "tree differs: exits 1" "1" "$code"
+    assert_contains "tree differs: says so" "$out" "differs from dev's tree; not tagging it"
+    assert_eq "tree differs: not tagged" "" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+
+    # dev was fast-forwarded onto main: no merge commit to tag.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    git push -q origin dev:main
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "fast-forward: exits 1" "1" "$code"
+    assert_contains "fast-forward: says so" "$out" "but not through a merge commit; not tagging it"
+    assert_eq "fast-forward: not tagged" "" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+
+    # Local main has a commit origin's lacks: not pushed along with the tag.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    gh pr merge 1 --merge --subject "version [release]: v0.1.0 - PR #1" >/dev/null 2>&1
+    git checkout -q main
+    git commit -q --allow-empty -m "unreleased"
+    git checkout -q dev
+    local origin_main
+    origin_main=$(remote_sha main)
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "main ahead: exits 1" "1" "$code"
+    assert_contains "main ahead: says so" "$out" "main has commits that origin/main lacks; not pushing them with v0.1.0"
+    assert_eq "main ahead: origin/main unchanged" "$origin_main" "$(remote_sha main)"
+    assert_eq "main ahead: tag not pushed" "" "$(remote_sha v0.1.0)"
+    teardown_remote_repo
+}
+
+# The number of patch bump commits on dev.
+patch_bumps() {
+    git log --format=%s dev | grep -c '^version \[patch\]' || true
+}
+
+test_unfinished_bump_resumes_pr() {
+    echo ""
+    echo "A refused push in 'release pr': the same command pushes and opens the PR"
+    setup_remote_repo
+    arm_step_failure push >/dev/null
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr patch -y 2>&1) || code=$?
+    assert_eq "pr exits 1" "1" "$code"
+    assert_contains "says the bump is not pushed" "$out" "push    failed; v0.1.0 is committed on dev but not pushed"
+    assert_contains "resume is the same command" "$out" "resume: stanza release pr patch -y"
+    assert_contains "then the merge" "$out" "then review the PR and run: stanza release merge"
+
+    rm "$TEST_TMPDIR/remote.git/hooks/update"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr patch -y --check 2>&1) || code=$?
+    assert_eq "check exits 0" "0" "$code"
+    assert_contains "check reports the resume" "$out" \
+        "would resume the patch bump to 0.1.0 already on dev and open its PR"
+
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr patch -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume keeps the bump" "$out" "0.1.0 on dev, committed earlier"
+    assert_contains "resume pushes dev" "$out" "push    origin/dev"
+    assert_contains "resume opens the PR" "$out" "#1 https://example.test/pull/1"
+    assert_eq "not bumped again" "0.1.0" "$(cat VERSION)"
+    assert_eq "one patch bump" "1" "$(patch_bumps)"
+    assert_eq "dev pushed" "$(git rev-parse dev)" "$(remote_sha dev)"
+    assert_eq "PR open" "open" "$(cat "$GH_MOCK_STATE/state")"
+
+    # Everything is done: a further run changes nothing.
+    local json
+    code=0
+    json=$(NO_COLOR=1 "$STANZA" --json release pr patch -y 2>/dev/null) || code=$?
+    assert_eq "second resume exits 0" "0" "$code"
+    assert_contains "second resume is marked resumed" "$json" '"resumed":true'
+    assert_contains "second resume has no from_version" "$json" '"from_version":null'
+    assert_eq "second resume: one patch bump" "1" "$(patch_bumps)"
+
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "merge exits 0" "0" "$code"
+    assert_eq "released" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+}
+
+test_unfinished_bump_resumes_full() {
+    echo ""
+    echo "A failed PR step in a full release: the same command finishes it"
+    setup_remote_repo
+    cat > CHANGELOG.md << 'EOF'
+# Changelog
+
+## [Unreleased]
+
+### Added
+- A new thing
+EOF
+    git add CHANGELOG.md
+    git commit -q -m "add changelog"
+    git push -q origin dev
+    arm_step_failure pr >/dev/null
+
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "release exits 1" "1" "$code"
+    assert_contains "says nothing is merged" "$out" "pr      failed; v0.1.0 is pushed to dev; nothing is merged"
+    assert_contains "resume is the same command" "$out" "resume: stanza release patch -y"
+
+    # [Unreleased] is promoted and empty now; the resume does not refuse it.
+    rm "$GH_MOCK_STATE/create_fail"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume finds dev pushed" "$out" "origin/dev (already pushed)"
+    assert_contains "resume merges" "$out" "#1 merged into main"
+    assert_eq "tagged" "v0.1.0" "$(git tag -l v0.1.0)"
+    assert_eq "tag on origin" "$(git rev-parse v0.1.0)" "$(remote_sha v0.1.0)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "one patch bump" "1" "$(patch_bumps)"
+    teardown_remote_repo
+
+    # The re-run keeps the flags the PR and the merge read.
+    setup_remote_repo
+    arm_step_failure pr >/dev/null
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y --pr-note "a note" --skip-checks 2>&1) || code=$?
+    assert_eq "flags: exits 1" "1" "$code"
+    assert_contains "flags: resume keeps them" "$out" \
+        "resume: stanza release patch --pr-note a\\ note --skip-checks -y"
+    rm "$GH_MOCK_STATE/create_fail"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch --pr-note a\ note --skip-checks -y 2>&1) || code=$?
+    assert_eq "flags: resume exits 0" "0" "$code"
+    assert_contains "flags: PR body has the note" "$(cat "$GH_MOCK_STATE/body")" "a note"
+    teardown_remote_repo
+}
+
+test_unfinished_bump_refusals() {
+    echo ""
+    echo "An unfinished bump is not bumped again or resumed as something else"
+    setup_remote_repo
+    arm_step_failure push >/dev/null
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1 || true
+    rm "$TEST_TMPDIR/remote.git/hooks/update"
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr minor -y 2>&1) || code=$?
+    assert_eq "other type: exits 1" "1" "$code"
+    assert_contains "other type: says so" "$out" \
+        "dev already carries an unreleased patch bump to 0.1.0; not bumping again"
+    assert_contains "other type: names the resume" "$out" "resume it: stanza release pr patch -y"
+    assert_eq "other type: not bumped" "0.1.0" "$(cat VERSION)"
+    teardown_remote_repo
+
+    # Merged on origin, untagged: that is the merge phase's to finish.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    gh pr merge 1 --merge --subject "version [release]: v0.1.0 - PR #1" >/dev/null 2>&1
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "merged: exits 1" "1" "$code"
+    assert_contains "merged: says so" "$out" "v0.1.0 is already merged into main, untagged"
+    assert_contains "merged: hints the merge phase" "$out" "finish it: stanza release merge"
+    assert_eq "merged: not bumped" "0.1.0" "$(cat VERSION)"
+    teardown_remote_repo
+
+    # The same, without a PR: main was merged and pushed by hand.
+    setup_remote_repo
+    arm_step_failure push >/dev/null
+    NO_COLOR=1 "$STANZA" release patch -y --no-pr >/dev/null 2>&1 || true
+    rm "$TEST_TMPDIR/remote.git/hooks/update"
+    git push -q origin dev
+    git checkout -q main
+    git merge -q --no-ff dev -m "merge dev"
+    git push -q origin main
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || code=$?
+    assert_eq "merged, no PR: exits 1" "1" "$code"
+    assert_contains "merged, no PR: says so" "$out" "v0.1.0 is already merged into main, untagged"
+    assert_contains "merged, no PR: hints the merge phase" "$out" "finish it: stanza release merge --no-pr"
+    assert_eq "merged, no PR: not tagged" "" "$(git tag -l v0.1.0)"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y --no-pr 2>&1) || code=$?
+    assert_eq "merged, no PR: the hint finishes it" "0" "$code"
+    assert_eq "merged, no PR: tag is the merge" "$(remote_sha main)" "$(remote_sha v0.1.0)"
+    teardown_remote_repo
+
+    # Released with --no-dev-cycle: the tag exists, so this is a new release.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --no-dev-cycle >/dev/null 2>&1
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr patch -y 2>&1) || code=$?
+    assert_eq "tagged: exits 0" "0" "$code"
+    assert_contains "tagged: bumps to the next version" "$out" "0.1.0 -> 0.1.1  on dev"
+    teardown_remote_repo
+}
+
 # --- Run -------------------------------------------------------------------
 
 test_merge_requires_dev() {
@@ -1191,14 +1549,16 @@ test_pr_merge_guards() {
         fi
         teardown_remote_repo
     done
+    # Without a local dev, preflight refuses before it reads the PR.
     setup_remote_repo
     "$STANZA" release pr patch -y >/dev/null 2>&1
-    source_release
     git branch -m dev feature
+    before=$(git rev-parse main)
     code=0
-    out=$(gh_merge_pr v0.1.0 1 2>&1) || code=$?
+    out=$("$STANZA" release merge 1 -y 2>&1) || code=$?
     assert_eq "missing dev head refuses PR merge" "1" "$code"
-    assert_contains "missing dev head explains failure" "$out" "Could not verify"
+    assert_contains "missing dev head explains failure" "$out" "should be performed on dev"
+    assert_eq "missing dev head leaves main unchanged" "$before" "$(git rev-parse main)"
     teardown_remote_repo
 }
 
@@ -1367,20 +1727,42 @@ test_checks_timeout() {
 
 test_checks_read_error_stops_merge() {
     echo ""
-    echo "A PR whose checks cannot be read is not merged"
+    echo "A PR whose checks cannot be read is not merged; a passing blip is retried"
     setup_remote_repo
     "$STANZA" release pr patch -y >/dev/null 2>&1
-    # A gh that fails on checks, otherwise the mock.
+    # A gh that fails on checks (the first $GH_CHECKS_FAILS reads, or every
+    # read when unset), otherwise the mock.
     cat > "$TEST_TMPDIR/bin/gh-real" < "$TEST_TMPDIR/bin/gh"
     chmod +x "$TEST_TMPDIR/bin/gh-real"
-    printf '#!/bin/bash\n[[ "$1 $2" == "pr checks" ]] && { echo "HTTP 502" >&2; exit 1; }\nexec "%s" "$@"\n' \
-        "$TEST_TMPDIR/bin/gh-real" > "$TEST_TMPDIR/bin/gh"
+    cat > "$TEST_TMPDIR/bin/gh" <<SHIM
+#!/bin/bash
+if [[ "\$1 \$2" == "pr checks" ]]; then
+    echo x >> "\$GH_MOCK_STATE/checks_errors"
+    n=\$(wc -l < "\$GH_MOCK_STATE/checks_errors")
+    if [[ -z "\${GH_CHECKS_FAILS:-}" || \$n -le \$GH_CHECKS_FAILS ]]; then
+        echo "HTTP 502" >&2; exit 1
+    fi
+fi
+exec "$TEST_TMPDIR/bin/gh-real" "\$@"
+SHIM
     local out code=0
     out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
     assert_eq "exits 1" "1" "$code"
+    assert_eq "read three times before stopping" "3" "$(wc -l < "$GH_MOCK_STATE/checks_errors" | tr -d ' ')"
+    assert_contains "warns on each retry" "$out" "could not read the checks of PR #1; retrying"
     assert_contains "says the checks were not read" "$out" "could not read the checks of PR #1"
     assert_contains "shows gh's output" "$out" "HTTP 502"
     assert_eq "no tag" "" "$(git tag)"
+
+    # One failed read, then the checks pass: the release goes through.
+    rm -f "$GH_MOCK_STATE/checks_errors"
+    printf 'pass\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    code=0
+    out=$(GH_CHECKS_FAILS=1 NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "blip: release succeeds" "0" "$code"
+    assert_contains "blip: retried" "$out" "could not read the checks of PR #1; retrying"
+    assert_contains "blip: passed after the retry" "$out" "checks  1 passed"
+    assert_eq "blip: tag created" "v0.1.0" "$(git tag -l v0.1.0)"
     teardown_remote_repo
 }
 
@@ -1570,6 +1952,289 @@ test_no_pr_without_gh() {
     teardown_remote_repo
 }
 
+# --- Preflight (plan 004) --------------------------------------------------
+
+# Record the refs a refused release must leave alone; preflight_unchanged
+# asserts they did not move.
+preflight_snapshot() {
+    SNAP_DEV=$(git rev-parse dev)
+    SNAP_MAIN=$(git rev-parse main)
+    SNAP_ORIGIN_DEV=$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse dev)
+    SNAP_ORIGIN_MAIN=$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse main 2>/dev/null || true)
+}
+
+preflight_unchanged() {
+    local label="$1"
+    assert_eq "$label: dev unchanged" "$SNAP_DEV" "$(git rev-parse dev)"
+    assert_eq "$label: main unchanged" "$SNAP_MAIN" "$(git rev-parse main)"
+    assert_eq "$label: origin/dev unchanged" "$SNAP_ORIGIN_DEV" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse dev)"
+    assert_eq "$label: origin/main unchanged" "$SNAP_ORIGIN_MAIN" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse main 2>/dev/null || true)"
+    assert_eq "$label: no PR opened" "" "$(cat "$GH_MOCK_STATE/number" 2>/dev/null)"
+}
+
+test_version_order() {
+    echo ""
+    echo "version_lt orders semver, alpha, and LaTeX versions"
+    eval "$(extract_function version_lt "$STANZA_DIR/lib/stanza-release")"
+    local pair
+    for pair in "0.1.0a0 0.1.0" "0.1.0 0.1.1a0" "0.1.0a1 0.1.0a2" "0.9.9 0.10.0" \
+        "1.2 1.10" "1 1.0.1" "0.1.0a9 0.1.0a10"; do
+        assert_eq "${pair% *} < ${pair#* }" "yes" \
+            "$(version_lt ${pair% *} ${pair#* } && echo yes || echo no)"
+        assert_eq "not ${pair#* } < ${pair% *}" "no" \
+            "$(version_lt ${pair#* } ${pair% *} && echo yes || echo no)"
+    done
+    assert_eq "equal versions are not lower" "no" "$(version_lt 1.0.0 1.0 && echo yes || echo no)"
+}
+
+test_preflight_existing_tag() {
+    echo ""
+    echo "A release whose tag exists is refused before anything changes"
+    local where phase out code
+    for where in local remote; do
+        for phase in full pr; do
+            setup_remote_repo
+            git tag v0.1.0 main
+            if [[ "$where" == remote ]]; then
+                git push -q origin v0.1.0
+                git tag -d v0.1.0 >/dev/null
+            fi
+            preflight_snapshot
+            local args=(release patch -y)
+            [[ "$phase" == pr ]] && args=(release pr patch -y)
+            code=0
+            out=$(NO_COLOR=1 "$STANZA" "${args[@]}" 2>&1) || code=$?
+            assert_eq "$where tag, $phase: exits 1" "1" "$code"
+            if [[ "$where" == local ]]; then
+                assert_contains "$where tag, $phase: names the tag" "$out" "tag v0.1.0 already exists in this clone"
+            else
+                assert_contains "$where tag, $phase: names the tag" "$out" "tag v0.1.0 already exists on origin"
+            fi
+            assert_eq "$where tag, $phase: version unchanged" "0.1.0a0" "$(cat VERSION)"
+            preflight_unchanged "$where tag, $phase"
+            teardown_remote_repo
+        done
+    done
+}
+
+test_preflight_gh_auth() {
+    echo ""
+    echo "A gh that is not logged in is refused before the bump commit"
+    setup_remote_repo
+    touch "$GH_MOCK_STATE/auth_fail"
+    preflight_snapshot
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "exits 1" "1" "$code"
+    assert_contains "says gh is not authenticated" "$out" "GitHub CLI is not authenticated"
+    assert_contains "hints the login" "$out" "gh auth login"
+    assert_eq "version unchanged" "0.1.0a0" "$(cat VERSION)"
+    preflight_unchanged "gh auth"
+    teardown_remote_repo
+
+    # --no-pr makes no gh calls, so it does not need the login.
+    setup_remote_repo
+    touch "$GH_MOCK_STATE/auth_fail"
+    code=0
+    NO_COLOR=1 "$STANZA" release patch -y --no-pr >/dev/null 2>&1 || code=$?
+    assert_eq "--no-pr releases without the login" "0" "$code"
+    assert_eq "--no-pr tagged" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+}
+
+test_preflight_reports_all() {
+    echo ""
+    echo "Several failed checks are reported in one run"
+    setup_remote_repo
+    echo notes > NOTES
+    git add NOTES
+    git commit -q -m "add notes"
+    git push -q origin dev
+    echo changed >> NOTES
+    git tag v0.1.0 main
+    touch "$GH_MOCK_STATE/auth_fail"
+    preflight_snapshot
+
+    local out json code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "exits 1" "1" "$code"
+    assert_contains "reports the dirty tree" "$out" "Uncommitted changes"
+    assert_contains "shows the changed file" "$out" "M NOTES"
+    assert_contains "reports gh" "$out" "GitHub CLI is not authenticated"
+    assert_contains "reports the tag" "$out" "tag v0.1.0 already exists"
+    preflight_unchanged "all at once"
+
+    code=0
+    json=$(NO_COLOR=1 "$STANZA" --json release patch -y 2>/dev/null) || code=$?
+    assert_eq "--json: exits 1" "1" "$code"
+    assert_contains "--json: failed in preflight" "$json" '"failed_step":"preflight"'
+    assert_contains "--json: error is the first failure" "$json" '"error":"Uncommitted changes, commit or stash them first."'
+    assert_contains "--json: lists the gh failure" "$json" '{"error":"GitHub CLI is not authenticated","hint":"authenticate: gh auth login\nor release without GitHub: stanza release patch --local"}'
+    if command -v jq >/dev/null 2>&1; then
+        assert_eq "--json: errors lists all three" "3" "$(printf '%s' "$json" | jq '.errors | length')"
+        assert_eq "--json: stdout is one JSON document" "1" "$(printf '%s' "$json" | jq -s 'length')"
+    fi
+    teardown_remote_repo
+}
+
+test_preflight_version_order() {
+    echo ""
+    echo "A release below the latest version tag is refused"
+    local out code
+    setup_repo
+    git tag v0.2.0 main
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y --local 2>&1) || code=$?
+    assert_eq "patch below the latest tag exits 1" "1" "$code"
+    assert_contains "names both versions" "$out" "v0.1.0 is lower than the latest tag v0.2.0"
+    assert_eq "version unchanged" "0.1.0a0" "$(uv version --short)"
+    code=0
+    NO_COLOR=1 "$STANZA" release major -y --local >/dev/null 2>&1 || code=$?
+    assert_eq "a bump past it releases" "0" "$code"
+    assert_eq "tagged above the latest" "v1.0.0" "$(git tag -l v1.0.0)"
+    cleanup
+
+    # Only origin has the higher tag.
+    setup_remote_repo
+    git tag v0.2.0 main
+    git push -q origin v0.2.0
+    git tag -d v0.2.0 >/dev/null
+    preflight_snapshot
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "below a tag only origin has: exits 1" "1" "$code"
+    assert_contains "below a tag only origin has: named" "$out" "v0.1.0 is lower than the latest tag v0.2.0"
+    preflight_unchanged "origin-only tag"
+    teardown_remote_repo
+
+    # A prerelease that would sort below the last release.
+    setup_repo
+    git tag v0.1.0
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release prerelease -y --local 2>&1) || code=$?
+    assert_eq "prerelease below the release exits 1" "1" "$code"
+    assert_contains "prerelease below the release named" "$out" "v0.1.0a1 is lower than the latest tag v0.1.0"
+    assert_eq "prerelease not bumped" "0.1.0a0" "$(uv version --short)"
+    cleanup
+}
+
+test_preflight_base_missing() {
+    echo ""
+    echo "A release into a base branch origin lacks is refused"
+    setup_remote_repo
+    git --git-dir="$TEST_TMPDIR/remote.git" config receive.denyDeleteCurrent ignore
+    git push -q origin :main 2>/dev/null
+    preflight_snapshot
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || code=$?
+    assert_eq "exits 1" "1" "$code"
+    assert_contains "names the missing branch" "$out" "origin has no main branch"
+    preflight_unchanged "no base on origin"
+    teardown_remote_repo
+}
+
+# Review follow-ups: checks that depend on the branch, and the tags they read.
+test_preflight_review_followups() {
+    echo ""
+    echo "Preflight skips dev's checks off dev, and reads tags of the project's form"
+    local out code
+
+    # No local dev: the branch failure is reported, not a raw git error.
+    setup_remote_repo
+    git checkout -q main
+    git branch -q -D dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "no local dev: exits 1" "1" "$code"
+    assert_contains "no local dev: reports the branch" "$out" "should be performed on dev"
+    assert_not_contains "no local dev: no raw git error" "$out" "fatal:"
+    teardown_remote_repo
+
+    # Off dev, a red dev is not read or reported.
+    setup_remote_repo
+    printf 'completed\tfailure\ttests\n' > "$GH_MOCK_STATE/runs.1"
+    git checkout -q -b feature
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "off dev: exits 1" "1" "$code"
+    assert_not_contains "off dev: dev's CI not reported" "$out" "CI failed on dev"
+    assert_eq "off dev: dev's CI not read" "" "$(cat "$GH_MOCK_STATE/runs_commits" 2>/dev/null)"
+    teardown_remote_repo
+
+    # A floating major tag does not count as a semver release.
+    setup_remote_repo
+    git tag v1 main
+    git push -q origin v1
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch --check 2>&1) || code=$?
+    assert_eq "floating v1 tag: check passes" "0" "$code"
+    assert_contains "floating v1 tag: target unchanged" "$out" "would release 0.1.0a0 -> v0.1.0"
+    teardown_remote_repo
+
+    # A prerelease is ordered against origin's tags too.
+    setup_remote_repo
+    git tag v0.1.0 main
+    git push -q origin v0.1.0
+    git tag -d v0.1.0 >/dev/null
+    preflight_snapshot
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release prerelease -y 2>&1) || code=$?
+    assert_eq "prerelease below an origin-only tag: exits 1" "1" "$code"
+    assert_contains "prerelease below an origin-only tag: named" "$out" "v0.1.0a1 is lower than the latest tag v0.1.0"
+    preflight_unchanged "prerelease, origin-only tag"
+    teardown_remote_repo
+
+    # merge --check reports a resume without fetching the tag it lacks.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --no-dev-cycle >/dev/null 2>&1
+    git checkout -q dev
+    git tag -d v0.1.0 >/dev/null
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge --check 2>&1) || code=$?
+    assert_eq "merge --check resume: exits 0" "0" "$code"
+    assert_contains "merge --check resume: says so" "$out" "would resume v0.1.0"
+    assert_eq "merge --check resume: tag not fetched" "" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+}
+
+test_release_check() {
+    echo ""
+    echo "--check runs preflight only"
+    setup_remote_repo
+    preflight_snapshot
+    local out json code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch --check 2>&1) || code=$?
+    assert_eq "passing check exits 0" "0" "$code"
+    assert_contains "says what would happen" "$out" "check   passed; would release 0.1.0a0 -> v0.1.0"
+    assert_contains "says nothing changed" "$out" "preflight passed; nothing changed"
+    assert_eq "version unchanged" "0.1.0a0" "$(cat VERSION)"
+    assert_eq "no tag" "" "$(git tag -l)"
+    preflight_unchanged "--check"
+
+    json=$(NO_COLOR=1 "$STANZA" --json release patch --check 2>/dev/null)
+    assert_contains "--json: ok and check" "$json" '"ok":true,"check":true'
+    assert_contains "--json: target" "$json" '"to_version":"0.1.0","tag":"v0.1.0"'
+
+    git tag v0.1.0 main
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch --check 2>&1) || code=$?
+    assert_eq "failing check exits 1" "1" "$code"
+    assert_contains "failing check names the failure" "$out" "tag v0.1.0 already exists"
+    git tag -d v0.1.0 >/dev/null
+
+    # merge --check finds the PR the pr phase opened and leaves it open.
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge --check 2>&1) || code=$?
+    assert_eq "merge check exits 0" "0" "$code"
+    assert_contains "merge check names the PR" "$out" "would merge and tag v0.1.0 from PR #1"
+    assert_eq "PR still open" "open" "$(cat "$GH_MOCK_STATE/state")"
+    assert_eq "still untagged" "" "$(git tag -l)"
+    teardown_remote_repo
+}
+
 trap cleanup EXIT
 
 test_local_patch_release
@@ -1593,7 +2258,7 @@ test_no_pr_merge_phase
 test_no_pr_protected_base_pushes_nothing
 test_no_pr_ignored_flags_warn
 test_no_pr_merge_phase_protected_skips_pr_create
-test_no_pr_diverged_base_hint
+test_no_pr_diverged_base_refused
 test_no_pr_ignored_by_prerelease
 test_pr_path_push_failure_hints_dev_cycle
 test_failed_step_is_named
@@ -1604,6 +2269,12 @@ test_subshell_error_reaches_json
 test_prerelease_push_failure_warns
 test_stalled_fetch_stops_cycle
 test_local_cycle_resume
+test_local_release_finished_remotely
+test_merged_release_resumes_tag
+test_merged_release_refusals
+test_unfinished_bump_resumes_pr
+test_unfinished_bump_resumes_full
+test_unfinished_bump_refusals
 test_checks_pass_then_merge
 test_checks_fail_stops_merge
 test_checks_none_reported
@@ -1614,6 +2285,14 @@ test_red_dev_blocks_bump
 test_no_pr_waits_for_dev_runs
 test_ci_edge_cases
 test_no_pr_without_gh
+test_version_order
+test_preflight_existing_tag
+test_preflight_gh_auth
+test_preflight_reports_all
+test_preflight_version_order
+test_preflight_base_missing
+test_preflight_review_followups
+test_release_check
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

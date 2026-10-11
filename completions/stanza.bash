@@ -46,7 +46,7 @@ _stanza_completion() {
     local release_phases="pr merge"
 
     # Release options
-    local release_opts="--pr-note --no-pr --skip-checks --no-dev-cycle --no-changelog --local -y --yes -q --quiet -v -vv --verbose --json --no-color -h --help"
+    local release_opts="--pr-note --no-pr --skip-checks --check --no-dev-cycle --no-changelog --local -y --yes -q --quiet -v -vv --verbose --json --no-color -h --help"
 
     # Init options
     local init_opts="-n --name -d --description -t --type --public --current-branch-only -y --yes -q --quiet -v -vv --verbose --json --no-color -h --help"

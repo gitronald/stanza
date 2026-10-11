@@ -367,9 +367,15 @@ set_version_in_latex() {
 
 # Validate a LaTeX-style version: 1 to 3 numeric components.
 # Valid: 1, 1.0, 1.20, 1.2.3.
+LATEX_VERSION_PATTERN='^[0-9]+(\.[0-9]+){0,2}$'
+
+is_valid_latex_version_string() {
+    [[ "$1" =~ $LATEX_VERSION_PATTERN ]]
+}
+
 validate_latex_version_string() {
     local v="$1"
-    if [[ ! "$v" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+    if ! is_valid_latex_version_string "$v"; then
         print_error "Invalid LaTeX version string: $v"
         exit 1
     fi
@@ -433,13 +439,21 @@ set_version_in_file() {
 
 # Validate that a string matches semver with optional alpha prerelease
 # Valid: 1.2.3, 0.1.0a0, 1.0.0a12
+VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+(a[0-9]+)?$'
+VERSION_LEADING_ZERO='(^|\.|a)0[0-9]+'
+
+# Succeed when $1 is valid; validate_version_string says which rule failed.
+is_valid_version_string() {
+    [[ "$1" =~ $VERSION_PATTERN && ! "$1" =~ $VERSION_LEADING_ZERO ]]
+}
+
 validate_version_string() {
     local version="$1"
-    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(a[0-9]+)?$ ]]; then
+    if [[ ! "$version" =~ $VERSION_PATTERN ]]; then
         print_error "Invalid version string: $version"
         exit 1
     fi
-    if [[ "$version" =~ (^|\.|a)0[0-9]+ ]]; then
+    if [[ "$version" =~ $VERSION_LEADING_ZERO ]]; then
         print_error "Invalid version string: $version (leading zeros are not allowed)"
         exit 1
     fi
@@ -652,40 +666,18 @@ has_remote() {
     return $?
 }
 
-# Validate that we're on a specific branch
-require_branch() {
-    local required_branch="$1"
-    local current_branch=$(get_current_branch)
-
-    if [ "$current_branch" != "$required_branch" ]; then
-        print_error "This operation should be performed on $required_branch branch"
-        echo "Current branch is $current_branch." >&2
-        exit 1
-    fi
+# Succeed when tracked files differ from HEAD.
+has_uncommitted_changes() {
+    ! git diff-index --quiet HEAD --
 }
 
 # Check for uncommitted changes
 check_uncommitted_changes() {
-    if ! git diff-index --quiet HEAD --; then
+    if has_uncommitted_changes; then
         print_error "Uncommitted changes, commit or stash them first."
         git status --porcelain >&2
         exit 1
     fi
-}
-
-# Check that current branch is NOT a protected branch
-check_not_protected_branch() {
-    local current_branch=$(get_current_branch)
-    local protected_branches=("main" "master")
-
-    # Check exact matches
-    for protected in "${protected_branches[@]}"; do
-        if [ "$current_branch" = "$protected" ]; then
-            print_error "Prerelease versions cannot be bumped on protected branch: $current_branch"
-            echo "Please switch to a development or feature branch." >&2
-            exit 1
-        fi
-    done
 }
 
 # Get ahead/behind status for a branch compared to its remote
@@ -709,63 +701,6 @@ get_branch_status() {
 
     # Get ahead/behind counts
     git rev-list --left-right --count "HEAD...origin/$branch" 2>/dev/null || echo "0 0"
-}
-
-# Check if branch is up to date with remote
-check_branch_up_to_date() {
-    local branch="$1"
-    local verbose="${2:-false}"
-
-    # Skip if no remote configured
-    if ! has_remote "origin"; then
-        return 0
-    fi
-
-    if [ "$verbose" = "true" ]; then
-        echo "Checking if $branch branch is up to date..."
-    fi
-    # Fetch remote branch
-    local fetch_out
-    if ! fetch_out=$(git_net fetch origin "$branch" 2>&1); then
-        print_error "Could not fetch from origin/$branch"
-        print_output "$fetch_out"
-        exit 1
-    fi
-
-    # Get ahead/behind counts
-    local ahead_behind
-    ahead_behind=$(git rev-list --left-right --count "HEAD...origin/$branch" 2>/dev/null || echo "0 0")
-    local ahead=$(echo "$ahead_behind" | awk '{print $1}')
-    local behind=$(echo "$ahead_behind" | awk '{print $2}')
-
-    # Check sync status
-    if [ "$ahead" -eq 0 ] && [ "$behind" -eq 0 ]; then
-        if [ "$verbose" = "true" ]; then
-            echo "✓ $branch is up to date with origin/$branch"
-        fi
-        return 0
-    fi
-
-    # Branch has diverged
-    local status_msg="$branch branch status:"
-    [ "$ahead" -gt 0 ] && status_msg="$status_msg $ahead commit(s) ahead"
-    [ "$ahead" -gt 0 ] && [ "$behind" -gt 0 ] && status_msg="$status_msg,"
-    [ "$behind" -gt 0 ] && status_msg="$status_msg $behind commit(s) behind"
-
-    print_error "$status_msg"
-    if [ "$verbose" = "true" ]; then
-        # Provide helpful suggestions
-        if [ "$ahead" -gt 0 ] && [ "$behind" -eq 0 ]; then
-            echo "Push your changes with: git push origin $branch"
-        elif [ "$ahead" -eq 0 ] && [ "$behind" -gt 0 ]; then
-            echo "Pull remote changes with: git pull origin $branch"
-        else
-            echo "Branch has diverged. You may need to:"
-            echo "  - Rebase: git pull --rebase origin $branch"
-            echo "  - Merge: git pull origin $branch"
-        fi
-    fi
-    exit 1
 }
 
 # Detect the base branch (main or master)
