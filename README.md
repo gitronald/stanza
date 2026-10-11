@@ -459,7 +459,7 @@ tests/run.sh tests/test-rules.sh  # just the files named
 /bin/bash tests/run.sh            # the whole suite on a given bash (3.2 on macOS)
 ```
 
-The suite needs `git`, `jq`, and `uv`. CI (`.github/workflows/test.yml`) runs it on Linux and on macOS's `/bin/bash` 3.2, and holds the shell sources to zero ShellCheck findings.
+The suite needs `git`, `jq`, and `uv`. CI (`.github/workflows/test.yml`) runs it on Linux and on macOS's `/bin/bash` 3.2, and holds the shipped scripts and `tests/run.sh` to zero ShellCheck findings.
 
 ### Compatibility Notes
 

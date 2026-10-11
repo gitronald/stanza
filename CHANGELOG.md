@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI runs the test suite on every push and pull request to `dev` and `main`:
   on Linux, on macOS's own `/bin/bash` 3.2 (the oldest bash stanza supports),
-  and through ShellCheck, which now reports no findings. `tests/run.sh` is the
-  one entry point for CI and for local runs.
+  and through ShellCheck, which now reports no findings in the shipped
+  scripts. `tests/run.sh` is the one entry point for CI and for local runs.
 - A test matrix holds every command with a JSON shape to its output contract
   under each verbosity, in text and `--json` mode, on success and on failure.
 
