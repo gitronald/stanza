@@ -5,7 +5,7 @@ status: active
 branch: feature/release-waits-for-checks
 created: 2026-10-10T20:04:32-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/15
 ---
 
 # Wait for green checks before merging a release
@@ -93,3 +93,4 @@ pointed at a commit with a failing test. The same failure had already shown on
   - Base: `dev` at `df3ccb5`
   - Worktree: `.worktrees/release-waits-for-checks`
   - PR: pending
+- **2026-10-10T20:25:17-07:00** — PR opened: https://github.com/gitronald/stanza/pull/15
