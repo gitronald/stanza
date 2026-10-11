@@ -1,10 +1,10 @@
 ---
 id: 4
 slug: release-preflight
-status: implemented
+status: done
 branch: feature/release-preflight
 created: 2026-10-09T18:49:08-07:00
-concluded:
+concluded: 2026-10-11T00:10:48-07:00
 pr: https://github.com/gitronald/stanza/pull/17
 ---
 
@@ -129,3 +129,49 @@ step boundaries in `lib/stanza-release`.
     merge step, after the bump is pushed. Catching it in preflight needs a
     fetch of the base branch.
 - **2026-10-10T23:45:38-07:00** — Implemented: 5 commits ahead of `dev`.
+- **2026-10-11T00:11:06-07:00** — Review follow-up (commits `847e4e6`, `aff6515`).
+  - **Raised.** `/code-review` at medium on PR #17: 9 findings, 6 confirmed
+    and 3 plausible; posted to the PR.
+  - **Fixed, each with a test in `test_preflight_review_followups`** (the
+    new tests fail on the pre-fix code, 12 assertions):
+    - A clone with no local `dev` crashed preflight: `check_dev_ci_before_bump`
+      ran `git rev-parse dev` after the branch check had failed, and set -e
+      exited with git's error before the report. The dev-CI read now also
+      waits on the branch check, so off `dev` it is neither read nor reported.
+    - `latest_version_tag` counted LaTeX-shaped tags in a semver project, so a
+      floating `v1` (common in GitHub Actions repos) refused every release. It
+      now takes the project type and counts only tags of that form.
+    - Prereleases ordered against this clone's tags only. They now read
+      origin's tags too; the missing-base check stays for releases that merge.
+    - `release merge --check` fetched an origin-only tag into the clone. Under
+      `--check` the fetch is left to the real run.
+  - **Also fixed.** The README function reference listed the three removed
+    helpers. The dirty-tree check now shares `has_uncommitted_changes` with
+    `check_uncommitted_changes`, and the local tag check reads the `git tag -l`
+    list it already had.
+  - **Conscious no-op.** A non-resumed `release merge` reads origin twice
+    (`find_shipped_release` for its tag, then the base branch and `v*` tags).
+    The first read decides the resume before anything else runs; folding them
+    together would couple `find_shipped_release` to preflight's remote read
+    for one round trip.
+  - **Checks.** All suites pass: release-workflow 499, install 116, latex 38,
+    network 34, output-modes 50, release-asset 27, rules 115, version-bumps
+    16, version-file-detection 101. bash 3.2 and shellcheck still not run.
+
+## Retrospective
+
+- Collecting failures instead of exiting changed the failure model under
+  every check: a helper that used to run only after the branch check passed
+  now ran after it failed. Two of the review's confirmed bugs were that
+  pattern. Next time a guard turns from exit into record-and-continue, list
+  every later check's inputs and gate each on the checks that produce them.
+- "Report every failure at once" and "skip what an earlier failure leaves
+  unknown" pull against each other; the `on_branch` / `gh_ok` flags were the
+  right shape, but they were applied by hand per check and one was missed.
+- The ordering check was new behavior, not a move of old code, and that is
+  where the false refusal (`v1` tags) came from. New refusals deserve a probe
+  against real-world tag sets, not only the repo's own conventions.
+- `--check` needed its own definition of "changes nothing". A fetch that
+  creates a ref counts; a fetch that refreshes remote-tracking refs does not.
+- Follow-up still open from the implementation log: under `--no-pr`, a base
+  branch that cannot fast-forward to origin fails after the bump is pushed.
