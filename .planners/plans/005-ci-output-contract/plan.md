@@ -88,3 +88,55 @@ on whatever bash that machine has (5.x here). Two gaps follow.
   - Worktree: `.worktrees/ci-output-contract`
   - PR: pending
 - **2026-10-11T02:07:06-07:00** — PR opened: https://github.com/gitronald/stanza/pull/20
+- **2026-10-11T02:22:45-07:00** — Implemented, CI green on all three jobs
+  (run 38127818430 at `a76f189`): Linux bash 5.2 and macOS `/bin/bash`
+  3.2.57 each ran 1471 checks with 0 failed, and ShellCheck 0.11.0 reported
+  no findings.
+  - **ShellCheck cleanup first.** The code had moved since the trial: 31
+    findings, not 27 (no `PURPLE`; four SC2155, all inside `$(...)` call
+    sites, so the splits change nothing; new SC1010, SC2088, and SC2206). A
+    `.shellcheckrc` (`external-sources`, `source-path=SCRIPTDIR`) plus
+    `# shellcheck source=` directives cleared the SC1091 and the cross-file
+    SC2034. `version_lt` splits with `read -r -a`; the bash completion uses a
+    `while read` loop. The checked set is the shipped scripts plus
+    `tests/run.sh`; the `tests/test-*.sh` files are not checked.
+  - **Runner.** `tests/run.sh` runs each file under its own bash and puts a
+    `bash` shim for that bash first on PATH, so `/bin/bash tests/run.sh`
+    runs stanza's `#!/usr/bin/env bash` on 3.2 too, with no test edits. It
+    sets `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, so local
+    runs see what a fresh CI machine sees.
+  - **Matrix.** `tests/test-output-contract.sh`: six rows (release
+    full/pr/merge/prerelease, init, rules install) x 4 verbosities x text and
+    `--json` x success and each forced failure (a failing pre-commit hook and
+    a dirty tree for release, a failing `gh` for init, a hand-written rule
+    file for rules install): 366 checks in about 15s. Validated with `jq`.
+    Three mutations on a scratch copy were each caught: the header printed
+    to stdout under `--json` (48 failures), `rules install -q` printing
+    nothing (1), and a failed release exiting 0 (64).
+  - **Found: `init` and `rules install` print nothing on stdout under
+    `--json` when they fail**, where a release prints an `ok:false`
+    document. The matrix records today's behavior (empty stdout) per row;
+    see Handoff question 1.
+  - **zsh** is a test file (`tests/test-completion-zsh.sh`) rather than a
+    workflow step, so humans run it through the same runner. It installs the
+    file as `_stanza` on `fpath`, runs `compinit`, and checks the mapping and
+    `autoload +X`. Sourcing the file directly is not the check: its last line
+    calls `_stanza`, which needs a completion context. It skips without zsh
+    (Linux CI) and ran 3 checks on macOS.
+  - **CI caught two test bugs**, both fixed in the tests:
+    `test-version-bumps.sh` and `test-version-file-detection.sh` relied on a
+    global git identity, and `test-rules.sh` expected the unresolved temp
+    path where git reports the physical one (`/var` -> `/private/var`).
+
+## Handoff
+
+- **State.** All work is committed and pushed on
+  `feature/ci-output-contract` (PR #20); CI is green.
+- **Open questions.**
+  1. Should `init` and `rules` emit a failure document (`ok:false`, `error`,
+     `hint`) on stdout under `--json`, as `release` does? Today they print
+     nothing on stdout and the error on stderr. The matrix pins the current
+     behavior (`gh:empty`, `handwritten:empty`); changing it is a schema
+     addition and a two-cell edit in the table.
+- **Not verified.** The badge renders only once `test.yml` runs on `main`,
+  so it shows no status until the next release merges.
