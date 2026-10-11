@@ -223,7 +223,7 @@ When a release stops partway, it prints the error git or gh gave, a row naming t
   hint      resume: git checkout dev && stanza release merge -y
 ```
 
-`stanza release merge` resumes a release that is already merged and tagged, and is a no-op once the dev cycle is done. With `--json`, a failed run emits `"ok": false` with `failed_step`, `completed_steps`, `error`, `resume`, and `hint` (which holds the recovery text when `resume` is `null`). `stanza guide` documents the fields.
+Re-running `stanza release <type>` or `stanza release pr <type>` resumes a bump that is on `dev` but not released: it pushes `dev` and opens the PR (or finds the open one) instead of bumping again. `stanza release merge` resumes a release that is already merged: it tags the PR's merge when the tag is missing, pushes the tag when only this clone has it (with the base branch, after a `--local` release), and is a no-op once the dev cycle is done. With `--json`, a failed run emits `"ok": false` with `failed_step`, `completed_steps`, `error`, `resume`, and `hint` (which holds the recovery text when `resume` is `null`). `stanza guide` documents the fields.
 
 Before it changes anything, a release checks what its phase needs: the branch, a clean tree, `dev` level with origin, `gh` authentication, the target tag free in this clone and on origin and above the latest version tag, the base branch on origin (with `--no-pr`, not diverged from the local one), and for `release merge` the open PR. It reports every failed check in one run (in `--json`, as an `errors` list), and `--check` runs only these checks.
 

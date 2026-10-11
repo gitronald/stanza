@@ -27,7 +27,9 @@ stanza release merge -y              # merge the PR, tag, open the next cycle
 - Phase 2 waits for the PR's checks before it merges (see *CI checks*), so
   there is no need to poll them yourself first.
 - Phase 2 also resumes a release that stopped after its merge: re-run
-  `stanza release merge -y` (see *When a release stops partway*).
+  `stanza release merge -y` (see *When a release stops partway*). A phase 1
+  that stopped before its PR opened resumes the same way: re-run
+  `stanza release pr <type> -y`.
 
 ## One-shot release (no pause)
 
@@ -164,10 +166,23 @@ command that resumes from there:
   hint    resume: git checkout dev && stanza release merge -y
 ```
 
-`stanza release merge` resumes a release that is already merged and tagged.
-It pushes the tag when only this clone has it, then runs the dev cycle. A
-re-run after the cycle has finished changes nothing. When the error carries a
-hint of its own, that hint replaces the generic resume line.
+What the resume command does depends on where the run stopped:
+
+- **Before the merge** (`push` or `pr`): run the same `stanza release <type>`
+  or `stanza release pr <type>` again. It finds the bump already on `dev`
+  (dev's last commit, untagged) and pushes `dev` and opens the PR, or takes the
+  PR that is already open, instead of bumping again. A different bump type is
+  refused, and so is a bump that is already merged into the base branch (that
+  is the merge phase's to finish).
+- **After the merge** (`merge`, `tag`, or `cycle`): `stanza release merge`. When
+  the PR is merged and the tag is missing, it finds the merge commit on the
+  base branch (the merge of dev's head, with dev's tree) and tags it. When only
+  this clone has the tag, it pushes it, together with the base branch when
+  that is ahead of origin's, as after a `--local` release. Then it runs the dev
+  cycle. A re-run after the cycle has finished changes nothing.
+
+When the error carries a hint of its own, that hint replaces the generic
+resume line.
 
 With `--json`, a failed run still prints one JSON document on stdout, so a
 caller that loses the exit status in a pipe (`stanza ... | tail`) still sees the
@@ -186,6 +201,9 @@ failure:
 - `completed_steps` lists the steps this run finished, in order.
 - `resume` is `null` when the error gave its own hints, which are then in
   `hint`.
+- On success, `resumed` is `true` when the run resumed an earlier one. A
+  resumed bump reports `from_version` as `null`, since the run did not see the
+  version before the bump.
 
 Git calls that reach the remote give up after `STANZA_NET_STALL_SECONDS`
 (default 30) below 1000 bytes/s, instead of waiting on a stalled connection.

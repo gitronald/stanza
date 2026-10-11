@@ -684,8 +684,11 @@ Phases let an agent pause for review between opening and merging a PR.
 a protected base branch refuses that push, and nothing is tagged remotely.
 
 A run that stops partway names the step that failed and the command that
-resumes it. 'merge' resumes a release that is already merged and tagged: it
-pushes the tag if only this clone has it, then runs the dev cycle.
+resumes it. The same 'release <type>' or 'release pr <type>' resumes a bump
+that is on dev but not released: it pushes dev and opens the PR instead of
+bumping again. 'merge' resumes a release that is already merged: it tags the
+PR's merge when the tag is missing, pushes the tag if only this clone has it
+(with the base branch, after a --local release), then runs the dev cycle.
 A git transfer that stays below 1000 bytes/s for STANZA_NET_STALL_SECONDS
 (default 30) is abandoned; 0 turns the limit off.
 
