@@ -94,7 +94,7 @@ pointed at a commit with a failing test. The same failure had already shown on
   - Worktree: `.worktrees/release-waits-for-checks`
   - PR: pending
 - **2026-10-10T20:25:17-07:00** — PR opened: https://github.com/gitronald/stanza/pull/15
-- **2026-10-10T20:26:00-07:00** — Implemented the CI gate (`1f436eb`) and its docs (`7439879`).
+- **2026-10-10T20:25:31-07:00** — Implemented the CI gate (`1f436eb`) and its docs (`7439879`).
   - The gate is a new release step, `checks`, between `pr` and `merge`, so a
     failure names it in the failed row and in `--json` (`failed_step`,
     `completed_steps`). The JSON success document gains `checks`: `passed`,
