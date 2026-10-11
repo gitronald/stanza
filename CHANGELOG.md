@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `stanza release --check` runs the release's preflight checks and changes
   nothing: exit 0 when the release could go ahead, 1 with every failure when
   it could not.
+- A release that stopped before its tag resumes with one command, where it
+  used to need commands typed by hand. Re-running `stanza release <type>` or
+  `stanza release pr <type>` after a failed `push` or `pr` step finds the bump
+  already on `dev` and pushes it and opens the PR instead of bumping again.
+  `stanza release merge` after the PR merged but before the tag finds the
+  merge commit on the base branch (the merge of `dev`'s head, with `dev`'s
+  tree) and tags it. The full and `pr` JSON documents carry `resumed`.
 
 ### Changed
 
@@ -26,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `stanza release merge` finishes a `--local` release against the remote. It
+  used to stop on a refused `git fetch origin main:main`, because the local
+  base branch carried the release merge that origin lacked, and its resume
+  hint repeated the same command. It now pushes the base branch and the tag
+  together (`git push --atomic`), and refuses with a clear error when the base
+  branch has diverged from origin's or carries commits after the tag.
 - A failed read of the release's checks no longer stops the release at once.
   The CI gate retries it, one poll interval apart, and stops only after three
   failed reads in a row, so a network blip such as a TLS handshake timeout no
