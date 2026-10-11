@@ -1,8 +1,8 @@
 ---
 id: 11
 slug: release-waits-for-checks
-status: draft
-branch:
+status: active
+branch: feature/release-waits-for-checks
 created: 2026-10-10T20:04:32-07:00
 concluded:
 pr:
@@ -85,3 +85,11 @@ pointed at a commit with a failing test. The same failure had already shown on
 
 - Configuring branch protection or rulesets on GitHub.
 - Running a repository's own test suite locally from stanza.
+
+## Log
+
+- **2026-10-10T20:14:48-07:00** — Activated.
+  - Branch: `feature/release-waits-for-checks`
+  - Base: `dev` at `df3ccb5`
+  - Worktree: `.worktrees/release-waits-for-checks`
+  - PR: pending
