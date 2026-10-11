@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-10
+
+### Added
+
+- `stanza release` waits for CI before it merges. The full release and
+  `release merge` poll the release PR's checks, and `--no-pr` polls the
+  workflow runs on `dev`'s head. A failed or cancelled check stops the release
+  at a new `checks` step, with the PR open and nothing merged or tagged; fix it
+  on `dev`, push, and resume with `stanza release merge`. A repository with no
+  checks releases as before. `STANZA_CHECKS_TIMEOUT` (default 1800 seconds; `0`
+  for no limit) bounds the wait, and the JSON document reports the result in
+  `checks`.
+- A stable release refuses to bump a `dev` whose head commit already failed
+  CI.
+- `--skip-checks` merges without waiting for CI and bumps a red `dev`.
+
+### Changed
+
+- Row labels are bold and colored instead of dim gray, which was hard to read
+  on a dark background. `stanza` commands and the installers' step rows use
+  pale green; the rows `install.sh` and `uninstall.sh` list before their
+  prompt use light blue. Both are 256-color codes. `warn`, `hint`, `error`,
+  and `done` keep their colors.
+
+### Fixed
+
+- `install.sh --prefix=PATH` put shell completions in `~/.bash_completion.d`
+  and `~/.zsh/completions` when `PATH/share` did not exist yet. A prefix other
+  than `~/.local` now keeps them under its own `share/`, created as needed.
+
 ## [1.2.2] - 2026-10-10
 
 ### Changed

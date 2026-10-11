@@ -383,6 +383,17 @@ assert_not_contains "no fallback hint" "$out" "fpath="
 assert_eq "share path used" "yes" \
     "$([[ -f "$HOME/.local/share/zsh/site-functions/_stanza" ]] && echo yes || echo no)"
 
+echo "A custom prefix keeps its completions under it"
+setup
+custom="$CASE_TMP/custom"
+out=$("$INSTALLER" --yes --prefix="$custom" 2>&1)
+assert_eq "bash under the prefix's new share/" "yes" \
+    "$([[ -f "$custom/share/bash-completion/completions/stanza" ]] && echo yes || echo no)"
+assert_eq "zsh under the prefix's new share/" "yes" \
+    "$([[ -f "$custom/share/zsh/site-functions/_stanza" ]] && echo yes || echo no)"
+assert_eq "nothing written under HOME" "" "$(ls -A "$HOME")"
+assert_not_contains "no fallback hint" "$out" "fpath="
+
 echo "Rows omitted for files that are not installed"
 setup
 mkdir -p "$HOME/.claude"
@@ -425,6 +436,8 @@ assert_eq "piped: no ESC byte" "no" "$(esc_state "$out")"
 setup
 out=$(env -u NO_COLOR TERM=xterm CLICOLOR_FORCE=1 "$INSTALLER" --yes 2>&1)
 assert_eq "CLICOLOR_FORCE=1 piped: colored" "yes" "$(esc_state "$out")"
+assert_contains "plan rows: bold light blue" "$out" $'\033[1;38;5;110mbin'
+assert_contains "step rows: bold pale green" "$out" $'\033[1;38;5;151mfiles'
 setup
 out=$(TERM=xterm CLICOLOR_FORCE=1 "$INSTALLER" --yes 2>&1)
 assert_eq "NO_COLOR beats CLICOLOR_FORCE" "no" "$(esc_state "$out")"
@@ -465,12 +478,12 @@ assert_eq "uninstall.sh carries the same block" "$(helpers_of "$INSTALLER")" "$u
 common=$(
     # shellcheck source=/dev/null
     source "$STANZA_DIR/lib/stanza-common"
-    printf '%s|%b|%b|%b|%b|%b|%s\n' "$LABEL_WIDTH" "$DIM" "$CYAN" "$RED" "$GREEN" "$BOLD" "$YELLOW"
+    printf '%s|%b|%b|%b|%b|%b|%s\n' "$LABEL_WIDTH" "$LABEL" "$CYAN" "$RED" "$GREEN" "$BOLD" "$YELLOW"
 )
-IFS='|' read -r c_width c_dim c_cyan c_red c_green c_bold c_yellow <<< "$common"
+IFS='|' read -r c_width c_label c_cyan c_red c_green c_bold c_yellow <<< "$common"
 sgr_of() { printf '\033[%sm' "$1"; }
 assert_eq "label width" "$c_width" "$LABEL_WIDTH"
-assert_eq "label: DIM" "$c_dim" "$(sgr_of "$SGR_LABEL")"
+assert_eq "label: LABEL" "$c_label" "$(sgr_of "$SGR_LABEL")"
 assert_eq "hint: CYAN" "$c_cyan" "$(sgr_of "$SGR_HINT")"
 assert_eq "error: RED" "$c_red" "$(sgr_of "$SGR_ERROR")"
 assert_eq "done: GREEN" "$c_green" "$(sgr_of "$SGR_DONE")"

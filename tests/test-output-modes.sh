@@ -365,7 +365,7 @@ rows_file=$(mktemp)
 rows=$(cat "$rows_file")
 rm -f "$rows_file"
 expect=$(printf '%b\n' '\033[1mstanza release\033[0m  (dev, uv)' \
-    '  \033[2mbump    \033[0m0.1.0 -> 0.1.1' \
+    '  \033[1;38;5;151mbump    \033[0m0.1.0 -> 0.1.1' \
     '  \033[0;32mdone    \033[0m0.1.1 on dev' \
     '  \033[0;36mhint    \033[0mgit status')
 if [[ "$rows" == "$expect" ]]; then pass "header, row, done, and hint carry color"; else fail "header, row, done, and hint carry color: $(printf '%s' "$rows" | cat -v)"; fi
@@ -376,7 +376,7 @@ echo "stanza release colors its rows on a terminal"
 if declare -f in_pty > /dev/null; then
     fresh_repo_alpha
     out=$(in_pty "env -u NO_COLOR TERM=xterm '$STANZA' release prerelease -y --local")
-    if [[ "$out" == *$'\033[2mbump'* ]]; then pass "dim label on a terminal"; else fail "dim label on a terminal: $(printf '%s' "$out" | cat -v)"; fi
+    if [[ "$out" == *$'\033[1;38;5;151mbump'* ]]; then pass "pale green label on a terminal"; else fail "pale green label on a terminal: $(printf '%s' "$out" | cat -v)"; fi
     if [[ "$out" == *$'\033[0;32mdone'* ]]; then pass "green done on a terminal"; else fail "green done on a terminal"; fi
     if [[ "$out" == *$'\033[1mstanza release'* ]]; then pass "bold header on a terminal"; else fail "bold header on a terminal"; fi
     out=$(in_pty "env NO_COLOR=1 TERM=xterm '$STANZA' release prerelease -y --local")

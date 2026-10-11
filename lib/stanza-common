@@ -7,7 +7,8 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
-DIM='\033[2m'
+# Row labels: bold pale green (256-color 151), readable on a dark background
+LABEL='\033[1;38;5;151m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
@@ -61,7 +62,7 @@ LABEL_WIDTH=8
 # Print "  LABEL    content" to stdout, the label in color code $2 when
 # stdout gets color. The decision is made here, never inside $(...), where
 # fd 1 is the capture pipe and would read as "not a terminal".
-# Usage: _print_label_row "$DIM" bump "0.6.1a0 -> 0.6.2a0"
+# Usage: _print_label_row "$LABEL" bump "0.6.1a0 -> 0.6.2a0"
 _print_label_row() {
     local on="" off=""
     if should_use_color; then on="$1" off="$NC"; fi
@@ -85,7 +86,7 @@ print_header() {
 print_row() {
     [[ "$JSON_OUTPUT" == "true" ]] && return 0
     [[ "$VERBOSITY" -lt 1 ]] && return 0
-    _print_label_row "$DIM" "$1" "${2:-}"
+    _print_label_row "$LABEL" "$1" "${2:-}"
 }
 
 # Print the closing "done" row in green.
