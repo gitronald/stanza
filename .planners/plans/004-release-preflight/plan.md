@@ -5,7 +5,7 @@ status: active
 branch: feature/release-preflight
 created: 2026-10-09T18:49:08-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/17
 ---
 
 # Check release preconditions before the first mutation
@@ -72,3 +72,4 @@ step boundaries in `lib/stanza-release`.
   - Base: `dev` at `66df759`
   - Worktree: `.worktrees/release-preflight`
   - PR: pending
+- **2026-10-10T23:45:06-07:00** — PR opened: https://github.com/gitronald/stanza/pull/17
