@@ -19,8 +19,8 @@ check_git_remote_status() {
 # ------------------------------------------------------------------------------
 # Step tracking and the exit trap
 #
-# Each release step (bump, push, pr, merge, tag, cycle) calls step_start before
-# it changes anything and step_done once its row is printed. When a run exits
+# Each release step (bump, push, pr, checks, merge, tag, cycle) calls step_start
+# before it changes anything and step_done once its row is printed. When a run exits
 # non-zero, on_release_exit names the step that stopped, what it left behind,
 # and the command that resumes from there; with --json it emits a failure
 # document, so a caller that loses the exit status in a pipe still sees it.
@@ -89,6 +89,27 @@ release_failure_advice() {
                 RESUME_CMD="$resume_merge"
                 RESUME_NOTES="if no PR is open, first: $pr_create"
             fi
+            ;;
+        checks)
+            if release_uses_pr; then
+                FAILED_STATE="PR #$RELEASE_PR_NUMBER is open; nothing is merged or tagged"
+            else
+                FAILED_STATE="$tag is pushed to dev; nothing is merged or tagged"
+            fi
+            RESUME_CMD="git checkout dev && $resume_merge"
+            case "$CHECKS_STOP" in
+                failed)
+                    if release_uses_pr; then
+                        RESUME_NOTES="before resuming, fix the failing checks on dev and push; the PR picks up the fix"
+                    else
+                        RESUME_NOTES="before resuming, fix the failing runs on dev and push"
+                    fi
+                    ;;
+                timeout)
+                    RESUME_NOTES="the resume waits again; STANZA_CHECKS_TIMEOUT sets the limit in seconds (0: none)"
+                    ;;
+            esac
+            RESUME_NOTES="${RESUME_NOTES:+$RESUME_NOTES$'\n'}to merge without waiting: $resume_merge --skip-checks"
             ;;
         merge)
             if [[ "$RELEASE_PR_MERGED" == "true" ]]; then
@@ -493,6 +514,7 @@ RELEASE_README_SYNCED=false
 RELEASE_CHANGELOG_PROMOTED=false
 VERBOSE="${VERBOSE:-false}"
 NO_PR=false
+SKIP_CHECKS=false
 
 # Detect a leading phase token (pr|merge) before the bump-type parser.
 # Phases let the workflow run in two stages: open the PR, pause for review,
@@ -546,6 +568,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-pr)
             NO_PR=true
+            shift
+            ;;
+        --skip-checks)
+            SKIP_CHECKS=true
             shift
             ;;
         --no-dev-cycle)
@@ -642,10 +668,18 @@ pushes the tag if only this clone has it, then runs the dev cycle.
 A git transfer that stays below 1000 bytes/s for STANZA_NET_STALL_SECONDS
 (default 30) is abandoned; 0 turns the limit off.
 
+The merge waits for CI: the release PR's checks, or with --no-pr the workflow
+runs on dev's head. A failed or cancelled check stops the release before the
+merge, with the PR left open; no checks at all is a pass. The wait gives up
+after STANZA_CHECKS_TIMEOUT seconds (default 1800; 0 waits without limit). A
+release also refuses to bump a dev whose head already failed CI.
+
 Options:
       --pr-note <TEXT>     Append a note to the PR body (full and pr phases)
       --no-pr              Merge dev into the base branch directly, without a
                            PR (full and merge phases; remote steps still run)
+      --skip-checks        Merge without waiting for CI, and bump a dev whose
+                           CI failed (for checks known broken for other reasons)
       --no-dev-cycle  Skip the post-release dev cycle: no merge-back to
                            dev and no next prerelease bump (full and merge phases)
       --no-changelog       Skip CHANGELOG [Unreleased] promotion and its
@@ -669,6 +703,7 @@ Examples:
   stanza release pr patch --pr-note "..."  Open PR with a note in its body
   stanza release patch -y --no-dev-cycle  Release, but leave dev untouched
   stanza release patch -y --no-changelog  Release without promoting CHANGELOG
+  stanza release merge -y --skip-checks   Merge without waiting for CI
   stanza --json release patch -y           Machine-readable output
 EOF
 }
@@ -729,27 +764,30 @@ fi
 
 # --no-pr changes only the merge step. A prerelease opens no PR and the pr phase
 # exists to open one, so the flag is ignored there; with no PR, a --pr-note has
-# nothing to attach to. Settled before the header, which reports NO_PR; the
-# warnings print after it.
-NO_PR_WARNINGS=()
+# nothing to attach to. A prerelease reads no CI, so --skip-checks is moot there.
+# Settled before the header, which reports NO_PR; the warnings print after it.
+FLAG_WARNINGS=()
 if [[ "$NO_PR" == "true" ]]; then
     if [[ "$BUMP_TYPE" == "prerelease" ]]; then
-        NO_PR_WARNINGS+=("--no-pr is ignored by prerelease, which opens no PR")
+        FLAG_WARNINGS+=("--no-pr is ignored by prerelease, which opens no PR")
         NO_PR=false
     elif [[ "$PHASE" == "pr" ]]; then
-        NO_PR_WARNINGS+=("--no-pr is ignored by 'release pr', which opens a PR")
+        FLAG_WARNINGS+=("--no-pr is ignored by 'release pr', which opens a PR")
         NO_PR=false
     elif [[ -n "$PR_NOTE" ]]; then
-        NO_PR_WARNINGS+=("--pr-note is ignored with --no-pr (no PR is opened)")
+        FLAG_WARNINGS+=("--pr-note is ignored with --no-pr (no PR is opened)")
         PR_NOTE=""
     fi
+fi
+if [[ "$SKIP_CHECKS" == "true" && "$BUMP_TYPE" == "prerelease" ]]; then
+    FLAG_WARNINGS+=("--skip-checks is ignored by prerelease, which reads no checks")
 fi
 
 [[ "$LOCAL_ONLY" == "true" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, local"
 [[ "$NO_PR" == "true" ]] && HEADER_CONTEXT="$HEADER_CONTEXT, no PR"
 print_header "release $CMD_LABEL" "$HEADER_CONTEXT"
 print_row_v checks "branch=$CURRENT_BRANCH, project=$PROJECT_TYPE_DETECTED, phase=$PHASE, yes=$YES_TO_ALL"
-for _warning in "${NO_PR_WARNINGS[@]}"; do
+for _warning in "${FLAG_WARNINGS[@]}"; do
     print_warning "$_warning"
 done
 
@@ -844,6 +882,7 @@ create_version_bump_on_dev() {
         check_branch_up_to_date "dev"
     fi
     check_changelog_before_release
+    check_dev_ci_before_bump
 
     # Bump and commit
     RELEASE_FROM_VERSION="$CURRENT_VERSION"
@@ -876,6 +915,251 @@ create_version_bump_on_dev() {
 # "null"), so callers can test it with [[ -z ... ]].
 gh_get_last_open_pr_number() {
     gh pr list --base "$BASE_BRANCH" --head dev --state open --json number --jq '.[0].number // empty'
+}
+
+# ------------------------------------------------------------------------------
+# CI gate
+#
+# A release merge waits for CI on what it ships: the release PR's checks, or
+# under --no-pr the workflow runs on dev's head commit. A failed or cancelled
+# check stops the release before anything is merged or tagged; on a commit,
+# only the newest run of each workflow counts. Nothing is a pass before
+# STANZA_CHECKS_GRACE_SECONDS (default 15) has passed, so a slow workflow can
+# register; no checks at all is then a pass. STANZA_CHECKS_TIMEOUT (default 1800; 0 = no limit) bounds
+# the wait; STANZA_CHECKS_INTERVAL (default 10) is the poll interval.
+# --skip-checks bypasses all of it.
+
+# Result of the merge gate, for the JSON doc: passed, none, skipped, or
+# unavailable (--no-pr, where gh cannot read the runs). Empty when not read.
+CHECKS_RESULT=""
+# Why the checks step stopped (failed, timeout, or error), for the exit advice.
+CHECKS_STOP=""
+
+# A non-negative integer setting from the environment, or the default.
+# Usage: checks_seconds STANZA_CHECKS_TIMEOUT 1800
+checks_seconds() {
+    local value="${!1:-$2}"
+    [[ "$value" =~ ^[0-9]+$ ]] || value="$2"
+    echo $((10#$value))
+}
+
+# Read CI once into CI_LINES, one "<bucket>\t<name>" line per check, bucket
+# one of pass, fail, or pending. Returns 0, 2 when no checks are reported, and
+# 1 when gh fails (its output in CI_READ_ERROR). Sets globals, so call it
+# directly, not in $(...).
+# Usage: read_ci pr <number> | read_ci commit <sha>
+CI_LINES=""
+CI_READ_ERROR=""
+read_ci() {
+    local kind="$1" ref="$2" out err status=0
+    err=$(mktemp "${TMPDIR:-/tmp}/stanza-ci.XXXXXX")
+    if [[ "$kind" == "pr" ]]; then
+        out=$(gh pr checks "$ref" --json bucket,name \
+            --jq '.[] | "\(.bucket)\t\(.name)"' 2>"$err") || status=$?
+    else
+        out=$(gh run list --commit "$ref" --json status,conclusion,workflowName \
+            --jq '.[] | "\(.status)\t\(.conclusion)\t\(.workflowName)"' 2>"$err") || status=$?
+    fi
+    CI_READ_ERROR=$(cat "$err")
+    rm -f "$err"
+    CI_LINES=""
+    if [[ $status -ne 0 ]]; then
+        # gh pr checks reports a PR without checks as an error.
+        [[ "$CI_READ_ERROR" == *"no checks reported"* ]] && return 2
+        CI_READ_ERROR="${CI_READ_ERROR:-${out}}"
+        return 1
+    fi
+    [[ -n "$out" ]] || return 2
+    # Fields are split by expansion, not `IFS=$'\t' read`: tab is IFS
+    # whitespace, so read collapses an empty field (an unfinished run's
+    # conclusion) and shifts the name into it.
+    local line bucket name run_status conclusion rest seen=$'\n'
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        if [[ "$kind" == "pr" ]]; then
+            bucket="${line%%$'\t'*}"
+            name="${line#*$'\t'}"
+            case "$bucket" in
+                pass|skipping) bucket=pass ;;
+                fail|cancel)   bucket=fail ;;
+                *)             bucket=pending ;;
+            esac
+        else
+            run_status="${line%%$'\t'*}"
+            rest="${line#*$'\t'}"
+            conclusion="${rest%%$'\t'*}"
+            name="${rest#*$'\t'}"
+            # gh lists runs newest first; a re-run or a run cancelled by a
+            # newer one is superseded by that run, so keep one per workflow.
+            [[ "$seen" == *$'\n'"$name"$'\n'* ]] && continue
+            seen="$seen$name"$'\n'
+            if [[ "$run_status" != "completed" ]]; then
+                bucket=pending
+            else
+                case "$conclusion" in
+                    failure|cancelled|timed_out|startup_failure) bucket=fail ;;
+                    *) bucket=pass ;;
+                esac
+            fi
+        fi
+        CI_LINES="$CI_LINES$bucket"$'\t'"$name"$'\n'
+    done <<< "$out"
+}
+
+# The names of the CI_LINES checks in one bucket, comma-separated.
+# Usage: ci_names fail
+ci_names() {
+    printf '%s' "$CI_LINES" | awk -F'\t' -v b="$1" \
+        '$1 == b { printf "%s%s", sep, ($2 == "" ? "(unnamed)" : $2); sep = ", " }'
+}
+
+# The number of CI_LINES checks in one bucket. Decisions use the count, not
+# ci_names, so a check without a name still counts.
+# Usage: ci_count pending
+ci_count() {
+    printf '%s' "$CI_LINES" | awk -F'\t' -v b="$1" '$1 == b { n++ } END { print n + 0 }'
+}
+
+# Wait for the checks of a PR or the runs on a commit to finish. Sets
+# CHECKS_RESULT (passed or none) and prints the checks row on success. On a
+# failed check or a timeout, prints the error, sets CHECKS_STOP, and returns 1.
+# On a read error, sets CHECKS_STOP=error and returns 1 without printing, so the
+# caller decides whether it stops the release.
+# Usage: wait_for_ci pr <number> "PR #1" | wait_for_ci commit <sha> "dev (abc1234)"
+wait_for_ci() {
+    local kind="$1" ref="$2" what="$3"
+    local timeout grace interval settle
+    timeout=$(checks_seconds STANZA_CHECKS_TIMEOUT 1800)
+    grace=$(checks_seconds STANZA_CHECKS_GRACE_SECONDS 15)
+    interval=$(checks_seconds STANZA_CHECKS_INTERVAL 10)
+    settle=$(( interval < 3 ? interval : 3 ))
+    local start=$SECONDS waited=false status elapsed pending total
+    while true; do
+        status=0
+        read_ci "$kind" "$ref" || status=$?
+        elapsed=$((SECONDS - start))
+        if [[ $status -eq 1 ]]; then
+            CHECKS_STOP=error
+            return 1
+        fi
+        if [[ $status -eq 2 ]]; then
+            if [[ $elapsed -ge $grace ]]; then
+                CHECKS_RESULT=none
+                print_row checks "none reported"
+                return 0
+            fi
+            sleep "$settle"
+            continue
+        fi
+        if [[ $(ci_count fail) -gt 0 ]]; then
+            CHECKS_STOP=failed
+            print_error "$what has failing checks: $(ci_names fail)"
+            return 1
+        fi
+        pending=$(ci_names pending)
+        if [[ $(ci_count pending) -eq 0 ]]; then
+            # A slower workflow may not have registered yet; give it the
+            # same grace as a PR with no checks before calling this a pass.
+            if [[ $elapsed -lt $grace ]]; then
+                sleep "$settle"
+                continue
+            fi
+            total=$(ci_count pass)
+            CHECKS_RESULT=passed
+            if [[ "$waited" == "true" ]]; then
+                print_row checks "$total passed after ${elapsed}s"
+            else
+                print_row checks "$total passed"
+            fi
+            return 0
+        fi
+        if [[ $timeout -gt 0 && $elapsed -ge $timeout ]]; then
+            CHECKS_STOP=timeout
+            print_error "$what checks still pending after ${timeout}s: $pending"
+            return 1
+        fi
+        if [[ "$waited" != "true" ]]; then
+            waited=true
+            print_row checks "waiting on $pending"
+        fi
+        sleep "$interval"
+    done
+}
+
+# Whether gh can read CI for this repo. The PR path requires gh and checked its
+# auth up front; under --no-pr, gh is optional and the gate is best-effort.
+ci_readable() {
+    release_uses_pr && return 0
+    command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1
+}
+
+# Refuse to bump a dev whose head commit already failed CI, so a known-red dev
+# gets no version commit pushed onto it. Runs still in progress are not waited
+# on: the merge gate waits on the release commit itself.
+check_dev_ci_before_bump() {
+    should_skip_remote && return 0
+    [[ "$SKIP_CHECKS" == "true" ]] && return 0
+    ci_readable || return 0
+    local sha status=0
+    sha=$(git rev-parse dev)
+    read_ci commit "$sha" || status=$?
+    if [[ $status -eq 1 ]]; then
+        # Early warning only: the merge gate is the check that stops a release,
+        # so a token that cannot read Actions runs does not block the bump.
+        print_warning "could not read the CI runs on dev (${sha:0:7}); not checked"
+        return 0
+    fi
+    [[ $status -eq 0 ]] || { print_row_v checks "dev (${sha:0:7}): no runs reported"; return 0; }
+    local failed
+    if [[ $(ci_count fail) -gt 0 ]]; then
+        failed=$(ci_names fail)
+        local yes=""
+        [[ "$YES_TO_ALL" == "true" ]] && yes=" -y"
+        print_error "CI failed on dev's head (${sha:0:7}): $failed; not bumping" \
+            "fix on dev and push, then: stanza release $CMD_LABEL$yes"
+        print_hint "or, if the failure is unrelated to the release: stanza release $CMD_LABEL$yes --skip-checks"
+        exit 1
+    fi
+    print_row_v checks "dev (${sha:0:7}): no failed runs"
+}
+
+# The merge gate: wait for CI on what is about to be merged, as its own step.
+# Usage: wait_for_release_ci pr <number> | wait_for_release_ci commit <sha>
+wait_for_release_ci() {
+    local kind="$1" ref="$2" what
+    step_start checks
+    if [[ "$SKIP_CHECKS" == "true" ]]; then
+        CHECKS_RESULT=skipped
+        print_row checks "skipped (--skip-checks)"
+        print_warning "merging without waiting for CI (--skip-checks)"
+        step_done
+        return 0
+    fi
+    if [[ "$kind" == "commit" ]] && ! ci_readable; then
+        CHECKS_RESULT=unavailable
+        print_row checks "not read (gh is not installed or not authenticated)"
+        step_done
+        return 0
+    fi
+    if [[ "$kind" == "pr" ]]; then what="PR #$ref"; else what="dev (${ref:0:7})"; fi
+    if ! wait_for_ci "$kind" "$ref" "$what"; then
+        if [[ "$CHECKS_STOP" == "error" ]]; then
+            if [[ "$kind" == "commit" ]]; then
+                # --no-pr may run against a remote gh cannot read; go on without it.
+                CHECKS_STOP=""
+                CHECKS_RESULT=unavailable
+                print_warning "could not read the CI runs on $what; merging without them"
+                print_output "$CI_READ_ERROR"
+                print_row checks "not read"
+                step_done
+                return 0
+            fi
+            print_error "could not read the checks of $what"
+            print_output "$CI_READ_ERROR"
+        fi
+        exit 1
+    fi
+    step_done
 }
 
 # Step 2a: Open a PR from dev into base (no merge — the create half of the
@@ -920,7 +1204,8 @@ gh_create_pr() {
 # With an explicit PR number (full flow passes the one it just created), that
 # PR is merged directly. With no number (merge phase) the single open PR is
 # resolved, erroring if there are none or more than one. Either way, refuses to
-# merge when dev has advanced past the PR head (would ship unreviewed commits).
+# merge when dev has advanced past the PR head (would ship unreviewed commits),
+# then waits for the PR's checks (the checks step) and stops if any fail.
 # The merge commit subject is "version [release]: <version_tag> - PR #<N>".
 # Sets RELEASE_PR_NUMBER, RELEASE_PR_URL.
 gh_merge_pr() {
@@ -966,6 +1251,9 @@ gh_merge_pr() {
         exit 1
     fi
 
+    wait_for_release_ci pr "$RELEASE_PR_NUMBER"
+    step_start merge
+
     RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
     confirm_step "2: Merge PR #$RELEASE_PR_NUMBER from dev into $BASE_BRANCH"
     gh_quiet pr merge "$RELEASE_PR_NUMBER" --merge \
@@ -981,10 +1269,14 @@ gh_merge_pr() {
 # Step 2b: Merge dev into main locally (--local, or --no-pr). Always a merge
 # commit (--no-ff), so the release carries the same "version [release]" subject
 # as a PR merge instead of fast-forwarding the base branch. With --no-pr the
-# base branch is first brought level with origin, and git_tag_version pushes it.
+# merge first waits for the CI runs on dev's head, the base branch is brought
+# level with origin, and git_tag_version pushes it.
 # Tagging is handled by the caller via git_tag_version, after this returns.
 git_merge_dev_into_main() {
     local version_tag="$1"
+    if ! should_skip_remote; then
+        wait_for_release_ci commit "$(git rev-parse dev)"
+    fi
     confirm_step "2: Merge dev into $BASE_BRANCH"
     step_start merge
     git_quiet checkout "$BASE_BRANCH"
@@ -1233,6 +1525,7 @@ case "$PHASE" in
         json_set commit "$RELEASE_COMMIT_SHA"
         json_set_raw pushed "$RELEASE_PUSHED"
         json_set_pr_field
+        json_set_or_null checks "$CHECKS_RESULT"
         json_set_raw tag "{\"name\":\"$(json_escape "$RELEASE_TAG_NAME")\",\"pushed\":$RELEASE_TAG_PUSHED}"
         json_set_or_null next_cycle_version "$NEW_DEV_VERSION"
         json_set_raw readme_synced "$RELEASE_README_SYNCED"
@@ -1345,6 +1638,7 @@ case "$PHASE" in
         json_set branch_from "dev"
         json_set branch_to "$BASE_BRANCH"
         json_set_pr_field
+        json_set_or_null checks "$CHECKS_RESULT"
         json_set_raw tag "{\"name\":\"$(json_escape "$RELEASE_TAG_NAME")\",\"pushed\":$RELEASE_TAG_PUSHED}"
         json_set_or_null next_cycle_version "$NEW_DEV_VERSION"
         json_set_raw readme_synced "$RELEASE_README_SYNCED"

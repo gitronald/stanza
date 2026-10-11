@@ -38,6 +38,8 @@ The bump commit also carries the README title sync and the CHANGELOG promotion.
 - Alpha versions (`0.1.0a1`) live on `dev`; stable versions are tagged on the
   base branch only.
 - Push `dev` before releasing; stanza blocks when local commits are ahead.
+- The release merge waits for the PR's checks and stops on a failure, so do
+  not poll them before running `stanza release merge`.
 - In a repo with a `CHANGELOG.md`, fill `## [Unreleased]` before a stable
   release. stanza promotes it to the new version and blocks when it is empty.
   Prereleases leave the changelog alone.
