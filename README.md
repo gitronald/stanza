@@ -461,10 +461,9 @@ Shared functions used by all subcommands:
 
 **Git Operations:**
 - `get_current_branch()` - Get current git branch
-- `check_uncommitted_changes()` - Check for uncommitted changes
-- `require_branch(name)` - Validate current branch
+- `has_uncommitted_changes()` - Succeed when tracked files differ from HEAD
+- `check_uncommitted_changes()` - Exit on uncommitted changes
 - `get_branch_status(branch)` - Get ahead/behind commit counts vs remote
-- `check_branch_up_to_date(branch)` - Check if branch is synced with remote
 - `has_remote(name)` - Check if remote exists
 - `git_quiet()` - Run git commands with verbose control
 - `gh_quiet()` - Run gh commands with verbose control
@@ -475,7 +474,8 @@ Shared functions used by all subcommands:
 - `get_version_from_file()` - Read version from VERSION file
 - `set_version_in_file(version)` - Write version to VERSION file
 - `bump_version_string(version, type)` - Bump a semver string in pure bash
-- `validate_version_string(version)` - Validate semver format
+- `validate_version_string(version)` - Validate semver format (exits on failure)
+- `is_valid_version_string(version)` - Test semver format without exiting
 
 **Release-time Docs Sync:**
 - `get_version_from_readme()` - Read the `v<version>` token from the README H1 title
@@ -503,7 +503,7 @@ Release-specific workflow functions:
 
 **Workflow Functions:**
 - `bump_and_commit_version()` - Bump version, sync README/CHANGELOG, create commit
-- `check_changelog_before_release()` - Pre-flight: block a release on an empty `[Unreleased]`
+- `release_preflight()` - Check everything the phase needs before the first commit, push, merge, or tag, and report every failure at once
 - `print_doc_sync_rows()` - Emit the readme/promote rows recorded by the last bump
 - `git_tag_version()` - Create and push version tag
 - `handle_prerelease_workflow()` - Execute prerelease workflow
