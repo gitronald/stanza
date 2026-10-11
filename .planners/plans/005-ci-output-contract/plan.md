@@ -1,7 +1,7 @@
 ---
 id: 5
 slug: ci-output-contract
-status: implemented
+status: active
 branch: feature/ci-output-contract
 created: 2026-10-09T18:49:08-07:00
 concluded:
@@ -147,6 +147,7 @@ on whatever bash that machine has (5.x here). Two gaps follow.
     standalone. The overlap with `test-output-modes.sh` is partial (values
     there, shape and failures here). The per-case repo rebuild stays (about
     10s).
+- **2026-10-11T04:32:08-07:00** — Reactivated: back to active after review.
 
 ## Handoff
 
