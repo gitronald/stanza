@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Row labels are bold and colored instead of dim gray, which was hard to read
+  on a dark background. `stanza` commands and the installers' step rows use
+  pale green; the rows `install.sh` and `uninstall.sh` list before their
+  prompt use light blue. Both are 256-color codes. `warn`, `hint`, `error`,
+  and `done` keep their colors.
+
 ## [1.2.2] - 2026-10-10
 
 ### Changed

@@ -41,7 +41,8 @@ SCRIPT_PATH="${BASH_SOURCE[0]:-}"
 # block; keep the three in step (tests/test-install.sh checks them).
 LABEL_WIDTH=8
 SGR_BOLD='1'
-SGR_LABEL='2'
+SGR_LABEL='1;38;5;151'    # bold pale green: rows that report a step
+SGR_PLAN='1;38;5;110'     # bold light blue: rows that list the plan before the prompt
 SGR_WARN='0;33'    # never bold: bold yellow turns bright yellow on white
 SGR_HINT='0;36'
 SGR_ERROR='0;31'
@@ -65,7 +66,7 @@ header() {
 }
 
 # "  label   content" to fd $3 (default 1), the label in SGR $4 (default
-# dim). An empty label continues the row above.
+# SGR_LABEL). An empty label continues the row above.
 row() {
     local label="$1" content="${2:-}" fd="${3:-1}" on="" off=""
     if [[ -n "$label" ]] && use_color "$fd"; then
@@ -79,6 +80,7 @@ hint() { row hint "$1" 2 "$SGR_HINT"; }
 error() { row error "$1" 2 "$SGR_ERROR"; }
 more() { row "" "$1" 2; }
 done_row() { row done "$1" 1 "$SGR_DONE"; }
+plan_row() { row "$1" "$2" 1 "$SGR_PLAN"; }
 
 # $1 with a leading $HOME shown as ~
 tilde() {
@@ -487,15 +489,15 @@ confirm_installation() {
     plan_install
     header install "${INSTALL_VERSION:+v$INSTALL_VERSION, }$(tilde "$PREFIX")"
     if [[ -z "$SOURCE_DIR" ]]; then
-        row source "${REPO_URL#https://}, release v$FETCH_VERSION"
+        plan_row source "${REPO_URL#https://}, release v$FETCH_VERSION"
     else
-        row source "$(tilde "$SOURCE_DIR"), checkout"
+        plan_row source "$(tilde "$SOURCE_DIR"), checkout"
     fi
-    row bin "$(tilde "$PREFIX/bin/stanza")"
-    row lib "$(tilde "$PREFIX/lib/stanza")"
-    [[ -z "$BASH_COMPLETION_DEST" ]] || row bash "$(tilde "$BASH_COMPLETION_DEST")"
-    [[ -z "$ZSH_COMPLETION_DEST" ]] || row zsh "$(tilde "$ZSH_COMPLETION_DEST")"
-    [[ -z "$RULE_DEST" ]] || row rule "$(tilde "$RULE_DEST")"
+    plan_row bin "$(tilde "$PREFIX/bin/stanza")"
+    plan_row lib "$(tilde "$PREFIX/lib/stanza")"
+    [[ -z "$BASH_COMPLETION_DEST" ]] || plan_row bash "$(tilde "$BASH_COMPLETION_DEST")"
+    [[ -z "$ZSH_COMPLETION_DEST" ]] || plan_row zsh "$(tilde "$ZSH_COMPLETION_DEST")"
+    [[ -z "$RULE_DEST" ]] || plan_row rule "$(tilde "$RULE_DEST")"
 
     # Check if running as root for non-system install
     if [[ "$SYSTEM_INSTALL" == false && $EUID -eq 0 ]]; then
