@@ -1,7 +1,7 @@
 ---
 id: 11
 slug: release-waits-for-checks
-status: active
+status: implemented
 branch: feature/release-waits-for-checks
 created: 2026-10-10T20:04:32-07:00
 concluded:
@@ -128,3 +128,4 @@ pointed at a commit with a failing test. The same failure had already shown on
     release-asset, rules, version-bumps, and version-file-detection all green).
   - Not verified: a live release against a repository with real GitHub
     Actions checks. Only the "no checks reported" behavior was observed live.
+- **2026-10-10T20:25:36-07:00** — Implemented: 4 commits ahead of `dev`.
