@@ -129,10 +129,29 @@ on whatever bash that machine has (5.x here). Two gaps follow.
     path where git reports the physical one (`/var` -> `/private/var`).
 - **2026-10-11T02:23:07-07:00** — Implemented: 9 commits ahead of `dev`.
 
+- **2026-10-11T02:35:03-07:00** — Review follow-up (code review at
+  medium: 12 candidates, 5 findings kept, all fixed in `a44140a` and `c72a286`;
+  CI run 38128579721 green, 1495 checks on Linux and on macOS bash 3.2.57).
+  - Fixed: failure cases now assert the release's `failed_step` (hook:
+    `bump`, or `cycle` for merge; dirty tree: `preflight`). A mutation that
+    reports every failure as `preflight` gives 16 failures.
+  - Fixed: `--json` success documents are checked for the `-q` value through
+    a per-row jq filter (`.to_version`, `.tag.name[1:]`, `.repo_url`,
+    `.path`). A wrong `repo_url` gives 4 failures.
+  - Fixed: an early return skipped `cleanup` and leaked the case's temp dir.
+  - Fixed: `eval` for `$T` was replaced by an `@T@` placeholder.
+  - Fixed: README and CHANGELOG now scope the zero-findings claim to the
+    shipped scripts and `tests/run.sh`. `tests/*.sh` carry 35 findings and
+    are not checked.
+  - No-op: per-file git identity blocks stay, since each test runs
+    standalone. The overlap with `test-output-modes.sh` is partial (values
+    there, shape and failures here). The per-case repo rebuild stays (about
+    10s).
+
 ## Handoff
 
 - **State.** All work is committed and pushed on
-  `feature/ci-output-contract` (PR #20); CI is green.
+  `feature/ci-output-contract` (PR #20); CI is green; the review gate ran and its findings are fixed.
 - **Open questions.**
   1. Should `init` and `rules` emit a failure document (`ok:false`, `error`,
      `hint`) on stdout under `--json`, as `release` does? Today they print
