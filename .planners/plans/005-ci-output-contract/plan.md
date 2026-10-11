@@ -5,7 +5,7 @@ status: active
 branch: feature/ci-output-contract
 created: 2026-10-09T18:49:08-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/20
 ---
 
 # Add CI with an output-mode matrix and a bash 3.2 job
@@ -87,3 +87,4 @@ on whatever bash that machine has (5.x here). Two gaps follow.
   - Base: `dev` at `decba7b`
   - Worktree: `.worktrees/ci-output-contract`
   - PR: pending
+- **2026-10-11T02:07:06-07:00** — PR opened: https://github.com/gitronald/stanza/pull/20

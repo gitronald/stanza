@@ -2,7 +2,7 @@
 
 | # | Plan | Status | Concluded | PR |
 |---|---|---|---|---|
-| 005 | [Add CI with an output-mode matrix and a bash 3.2 job](plans/005-ci-output-contract/plan.md) | active | — | — |
+| 005 | [Add CI with an output-mode matrix and a bash 3.2 job](plans/005-ci-output-contract/plan.md) | active | — | [#20](https://github.com/gitronald/stanza/pull/20) |
 | 006 | [Research porting stanza to a Python uv tool](plans/006-python-uv-port/plan.md) | draft | — | — |
 | 007 | [Resume a release that stopped before its tag](plans/007-resume-earlier-release-steps/plan.md) | done | 2026-10-11 01:10 PT | [#18](https://github.com/gitronald/stanza/pull/18) |
 | 004 | [Check release preconditions before the first mutation](plans/004-release-preflight/plan.md) | done | 2026-10-11 00:10 PT | [#17](https://github.com/gitronald/stanza/pull/17) |
