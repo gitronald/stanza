@@ -1023,9 +1023,12 @@ ci_count() {
 # Wait for the checks of a PR or the runs on a commit to finish. Sets
 # CHECKS_RESULT (passed or none) and prints the checks row on success. On a
 # failed check or a timeout, prints the error, sets CHECKS_STOP, and returns 1.
-# On a read error, sets CHECKS_STOP=error and returns 1 without printing, so the
-# caller decides whether it stops the release.
+# A read error is retried, one poll interval apart, so a network blip does not
+# stop a release; after CHECKS_READ_ATTEMPTS failed reads in a row, sets
+# CHECKS_STOP=error and returns 1 without printing, so the caller decides
+# whether it stops the release.
 # Usage: wait_for_ci pr <number> "PR #1" | wait_for_ci commit <sha> "dev (abc1234)"
+CHECKS_READ_ATTEMPTS=3
 wait_for_ci() {
     local kind="$1" ref="$2" what="$3"
     local timeout grace interval settle
@@ -1033,15 +1036,27 @@ wait_for_ci() {
     grace=$(checks_seconds STANZA_CHECKS_GRACE_SECONDS 15)
     interval=$(checks_seconds STANZA_CHECKS_INTERVAL 10)
     settle=$(( interval < 3 ? interval : 3 ))
-    local start=$SECONDS waited=false status elapsed pending total
+    local start=$SECONDS waited=false status elapsed pending total read_failures=0
     while true; do
         status=0
         read_ci "$kind" "$ref" || status=$?
         elapsed=$((SECONDS - start))
         if [[ $status -eq 1 ]]; then
-            CHECKS_STOP=error
-            return 1
+            read_failures=$((read_failures + 1))
+            if [[ $read_failures -ge $CHECKS_READ_ATTEMPTS ]] ||
+                [[ $timeout -gt 0 && $elapsed -ge $timeout ]]; then
+                CHECKS_STOP=error
+                return 1
+            fi
+            if [[ "$kind" == "pr" ]]; then
+                print_warning "could not read the checks of $what; retrying in ${interval}s"
+            else
+                print_warning "could not read the CI runs on $what; retrying in ${interval}s"
+            fi
+            sleep "$interval"
+            continue
         fi
+        read_failures=0
         if [[ $status -eq 2 ]]; then
             if [[ $elapsed -ge $grace ]]; then
                 CHECKS_RESULT=none

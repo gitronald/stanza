@@ -1367,20 +1367,42 @@ test_checks_timeout() {
 
 test_checks_read_error_stops_merge() {
     echo ""
-    echo "A PR whose checks cannot be read is not merged"
+    echo "A PR whose checks cannot be read is not merged; a passing blip is retried"
     setup_remote_repo
     "$STANZA" release pr patch -y >/dev/null 2>&1
-    # A gh that fails on checks, otherwise the mock.
+    # A gh that fails on checks (the first $GH_CHECKS_FAILS reads, or every
+    # read when unset), otherwise the mock.
     cat > "$TEST_TMPDIR/bin/gh-real" < "$TEST_TMPDIR/bin/gh"
     chmod +x "$TEST_TMPDIR/bin/gh-real"
-    printf '#!/bin/bash\n[[ "$1 $2" == "pr checks" ]] && { echo "HTTP 502" >&2; exit 1; }\nexec "%s" "$@"\n' \
-        "$TEST_TMPDIR/bin/gh-real" > "$TEST_TMPDIR/bin/gh"
+    cat > "$TEST_TMPDIR/bin/gh" <<SHIM
+#!/bin/bash
+if [[ "\$1 \$2" == "pr checks" ]]; then
+    echo x >> "\$GH_MOCK_STATE/checks_errors"
+    n=\$(wc -l < "\$GH_MOCK_STATE/checks_errors")
+    if [[ -z "\${GH_CHECKS_FAILS:-}" || \$n -le \$GH_CHECKS_FAILS ]]; then
+        echo "HTTP 502" >&2; exit 1
+    fi
+fi
+exec "$TEST_TMPDIR/bin/gh-real" "\$@"
+SHIM
     local out code=0
     out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
     assert_eq "exits 1" "1" "$code"
+    assert_eq "read three times before stopping" "3" "$(wc -l < "$GH_MOCK_STATE/checks_errors" | tr -d ' ')"
+    assert_contains "warns on each retry" "$out" "could not read the checks of PR #1; retrying"
     assert_contains "says the checks were not read" "$out" "could not read the checks of PR #1"
     assert_contains "shows gh's output" "$out" "HTTP 502"
     assert_eq "no tag" "" "$(git tag)"
+
+    # One failed read, then the checks pass: the release goes through.
+    rm -f "$GH_MOCK_STATE/checks_errors"
+    printf 'pass\ttest\n' > "$GH_MOCK_STATE/checks.1"
+    code=0
+    out=$(GH_CHECKS_FAILS=1 NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "blip: release succeeds" "0" "$code"
+    assert_contains "blip: retried" "$out" "could not read the checks of PR #1; retrying"
+    assert_contains "blip: passed after the retry" "$out" "checks  1 passed"
+    assert_eq "blip: tag created" "v0.1.0" "$(git tag -l v0.1.0)"
     teardown_remote_repo
 }
 

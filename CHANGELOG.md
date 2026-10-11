@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed read of the release's checks no longer stops the release at once.
+  The CI gate retries it, one poll interval apart, and stops only after three
+  failed reads in a row, so a network blip such as a TLS handshake timeout no
+  longer needs a `stanza release merge` to resume.
+
 ## [1.3.0] - 2026-10-10
 
 ### Added
