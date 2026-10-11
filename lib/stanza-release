@@ -117,8 +117,13 @@ release_failure_advice() {
             ;;
         merge)
             if [[ "$RELEASE_PR_MERGED" == "true" ]]; then
-                FAILED_STATE="PR #$RELEASE_PR_NUMBER is merged; $tag is not tagged"
-                RESUME_CMD="git checkout $base && git pull origin $base && git tag $tag && git checkout dev && $resume_merge"
+                # 'release merge' finds the merge on origin and tags it.
+                if [[ -n "$RELEASE_PR_NUMBER" ]]; then
+                    FAILED_STATE="PR #$RELEASE_PR_NUMBER is merged; $tag is not tagged"
+                else
+                    FAILED_STATE="the release is merged into $base; $tag is not tagged"
+                fi
+                RESUME_CMD="git checkout dev && $resume_merge"
             else
                 FAILED_STATE="$tag is not released"
                 RESUME_CMD="git checkout dev && $resume_merge"
@@ -269,10 +274,11 @@ push_with_retry() {
     return 1
 }
 
-# Tag and push version.
+# Tag and push version: HEAD, or the commit given.
+# Usage: git_tag_version <tag> [commit]
 # Side-effect: sets RELEASE_TAG_NAME, RELEASE_TAG_PUSHED at module scope.
 git_tag_version() {
-    local version="$1"
+    local version="$1" target="${2:-HEAD}"
     step_start tag
 
     # Check if tag already exists
@@ -282,7 +288,7 @@ git_tag_version() {
         print_hint "$BASE_BRANCH has the release merge, untagged; check the existing tag (git show $version) and tag by hand"
         exit 1
     fi
-    git tag "$version"
+    git tag "$version" "$target"
     RELEASE_TAG_NAME="$version"
 
     # Push to remote if not in local-only mode. --atomic: the remote updates
@@ -1449,6 +1455,62 @@ resume_shipped_release() {
     step_done
 }
 
+# Find a release that an earlier run merged into the base branch on origin and
+# did not tag: the merge step stopped after gh pr merge succeeded. Called once
+# find_shipped_release has found no tag. Fetches the base branch and, when
+# dev's head is on it, looks for the merge that put it there: a merge commit
+# whose second parent is dev's head. Its tree must be dev's, so the commit
+# tagged ships exactly what dev carried. Sets MERGED_RELEASE_COMMIT (and
+# SHIPPED_TAG) and returns 0 when found; returns 1 when dev's head is not on
+# origin's base branch. Part of release_preflight: a failed fetch, or dev's head
+# on the base branch without such a merge, is recorded with preflight_fail.
+MERGED_RELEASE_COMMIT=""
+find_merged_release() {
+    local tag="$1" out dev_head commit
+    MERGED_RELEASE_COMMIT=""
+    should_skip_remote && return 1
+    if ! out=$(git_net fetch origin "$BASE_BRANCH" 2>&1); then
+        preflight_fail "Could not fetch from origin/$BASE_BRANCH" "" "$out"
+        return 1
+    fi
+    dev_head=$(git rev-parse dev)
+    git merge-base --is-ancestor "$dev_head" "origin/$BASE_BRANCH" || return 1
+    # The earliest merge of dev's head on the way to origin's base branch.
+    commit=$(git rev-list --merges --parents --reverse --ancestry-path \
+        "$dev_head..origin/$BASE_BRANCH" | awk -v d="$dev_head" '$3 == d { print $1; exit }')
+    if [[ -z "$commit" ]]; then
+        preflight_fail "dev's head is on origin/$BASE_BRANCH, but not through a merge commit; not tagging it" \
+            "find the release commit (git log --oneline origin/$BASE_BRANCH) and tag it by hand: git tag $tag <commit> && git push origin refs/tags/$tag"
+        return 1
+    fi
+    if [[ "$(git rev-parse "$commit^{tree}")" != "$(git rev-parse "$dev_head^{tree}")" ]]; then
+        preflight_fail "the merge of dev into $BASE_BRANCH (${commit:0:7}) differs from dev's tree; not tagging it" \
+            "compare them (git diff dev ${commit:0:7}), then tag by hand: git tag $tag ${commit:0:7} && git push origin refs/tags/$tag"
+        return 1
+    fi
+    MERGED_RELEASE_COMMIT="$commit"
+    SHIPPED_TAG="$tag"
+}
+
+# Resume a release that find_merged_release found: bring the base branch level
+# with origin, which carries the merge, so git_tag_version can push it with the
+# tag. Sets RELEASE_PR_NUMBER (and RELEASE_PR_URL) when the merge subject names
+# the PR.
+resume_merged_release() {
+    local commit="$1" subject re=' - PR #([0-9]+)$'
+    step_start merge
+    RELEASE_PR_MERGED=true
+    subject=$(git log -1 --format=%s "$commit")
+    if [[ "$subject" =~ $re ]]; then
+        RELEASE_PR_NUMBER="${BASH_REMATCH[1]}"
+        RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
+    fi
+    git_quiet checkout "$BASE_BRANCH"
+    git_quiet pull --ff-only origin "$BASE_BRANCH"
+    print_row merge "${RELEASE_PR_NUMBER:+#$RELEASE_PR_NUMBER }merged into $BASE_BRANCH earlier (${commit:0:7}); resuming"
+    step_done
+}
+
 # Step 3 (gated): run the new prerelease cycle unless --no-dev-cycle was
 # given. When skipped, dev is left untouched (no merge-back, no bump) and the
 # caller stays on the base branch; NEW_DEV_VERSION is cleared so JSON emits null.
@@ -1717,11 +1779,15 @@ release_preflight() {
         tag="v$RELEASE_TARGET"
     fi
 
-    # merge: a release an earlier run merged and tagged is resumed instead, and
-    # needs nothing below. A failure to tell leaves the rest unknown.
+    # merge: a release an earlier run merged and tagged, or merged on origin
+    # without tagging, is resumed instead, and needs nothing below. A failure
+    # to tell leaves the rest unknown.
     if [[ "$PHASE" == "merge" && -n "$tag" ]]; then
         errors_before=${#PREFLIGHT_ERRORS[@]}
         if find_shipped_release; then
+            RELEASE_RESUMED=true
+        elif [[ ${#PREFLIGHT_ERRORS[@]} -eq $errors_before && "$RELEASE_TARGET" != *a* ]] &&
+            find_merged_release "$tag"; then
             RELEASE_RESUMED=true
         fi
         if [[ "$RELEASE_RESUMED" == "true" || ${#PREFLIGHT_ERRORS[@]} -gt $errors_before ]]; then
@@ -1800,7 +1866,9 @@ release_preflight() {
 # --check: report that the release can go ahead and what it would do.
 report_check_passed() {
     local summary
-    if [[ "$RELEASE_RESUMED" == "true" ]]; then
+    if [[ -n "$MERGED_RELEASE_COMMIT" ]]; then
+        summary="would resume $SHIPPED_TAG: tag its merge ${MERGED_RELEASE_COMMIT:0:7} on $BASE_BRANCH"
+    elif [[ "$RELEASE_RESUMED" == "true" ]]; then
         summary="would resume $SHIPPED_TAG"
     elif [[ "$BUMP_TYPE" == "prerelease" ]]; then
         summary="would bump $CURRENT_VERSION -> $RELEASE_TARGET on $CURRENT_BRANCH"
@@ -1948,7 +2016,13 @@ case "$PHASE" in
 
     merge)
         # Phase 2: merge the open PR (or merge dev directly), tag, new cycle.
-        if [[ "$RELEASE_RESUMED" == "true" ]]; then
+        if [[ -n "$MERGED_RELEASE_COMMIT" ]]; then
+            # An earlier run merged this release on origin and stopped before
+            # tagging it: tag that merge, then the dev cycle.
+            version_tag="$SHIPPED_TAG"
+            resume_merged_release "$MERGED_RELEASE_COMMIT"
+            git_tag_version "$version_tag" "$MERGED_RELEASE_COMMIT"
+        elif [[ "$RELEASE_RESUMED" == "true" ]]; then
             # An earlier run merged and tagged this release and stopped before
             # finishing: skip to the tag push and the dev cycle.
             version_tag="$SHIPPED_TAG"

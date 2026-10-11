@@ -1240,6 +1240,93 @@ test_local_release_finished_remotely() {
     teardown_remote_repo
 }
 
+test_merged_release_resumes_tag() {
+    echo ""
+    echo "A merge step that stops after the PR merged: release merge tags the merge"
+    setup_remote_repo
+    local old_main work="$PWD"
+    old_main=$(git rev-parse main)
+    # Once the PR merge reaches origin's main, fetches fail; pushes still work.
+    cat > "$TEST_TMPDIR/remote.git/hooks/post-receive" <<HOOK
+#!/bin/bash
+grep -q ' refs/heads/main$' || exit 0
+unset GIT_DIR GIT_WORK_TREE
+git --git-dir="$work/.git" config remote.origin.pushurl "$TEST_TMPDIR/remote.git"
+git --git-dir="$work/.git" config remote.origin.url "$TEST_TMPDIR/missing.git"
+HOOK
+    chmod +x "$TEST_TMPDIR/remote.git/hooks/post-receive"
+
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "release exits 1" "1" "$code"
+    assert_contains "names the failed pull" "$out" "git pull origin main failed"
+    assert_contains "says the PR is merged" "$out" "merge   failed; PR #1 is merged; v0.1.0 is not tagged"
+    assert_contains "resume is release merge" "$out" "resume: git checkout dev && stanza release merge -y"
+    assert_not_contains "no tagging by hand" "$out" "git tag v0.1.0"
+    assert_eq "not tagged" "" "$(git tag -l v0.1.0)"
+
+    # The network is back. A real gh pr merge leaves local main behind.
+    rm "$TEST_TMPDIR/remote.git/hooks/post-receive"
+    git config --unset remote.origin.pushurl
+    git config remote.origin.url "$TEST_TMPDIR/remote.git"
+    git checkout -q dev
+    git branch -f main "$old_main"
+
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y --check 2>&1) || code=$?
+    assert_eq "check exits 0" "0" "$code"
+    assert_contains "check reports the resume" "$out" "would resume v0.1.0: tag its merge"
+
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume finds the merge" "$out" "#1 merged into main earlier ("
+    assert_contains "resume tags it" "$out" "v0.1.0  pushed"
+    assert_eq "tag is the PR merge" "version [release]: v0.1.0 - PR #1" \
+        "$(git log -1 --format=%s v0.1.0 2>/dev/null)"
+    assert_eq "tag on origin" "$(remote_sha main)" "$(remote_sha v0.1.0)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "dev cycle pushed" "$(git rev-parse dev)" "$(remote_sha dev)"
+
+    local json
+    json=$(NO_COLOR=1 "$STANZA" --json release merge -y 2>/dev/null) || true
+    assert_contains "a second resume has nothing to tag" "$json" '"resumed":true'
+    teardown_remote_repo
+}
+
+test_merged_release_refusals() {
+    echo ""
+    echo "dev already on origin/main without a matching merge: not tagged"
+    # main carries a commit dev lacks, so the PR merge's tree is not dev's.
+    setup_remote_repo
+    git checkout -q main
+    echo fix > hotfix.txt
+    git add hotfix.txt
+    git commit -q -m "hotfix"
+    git push -q origin main
+    git checkout -q dev
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    gh pr merge 1 --merge --subject "version [release]: v0.1.0 - PR #1" >/dev/null 2>&1
+    git checkout -q dev
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "tree differs: exits 1" "1" "$code"
+    assert_contains "tree differs: says so" "$out" "differs from dev's tree; not tagging it"
+    assert_eq "tree differs: not tagged" "" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+
+    # dev was fast-forwarded onto main: no merge commit to tag.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    git push -q origin dev:main
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "fast-forward: exits 1" "1" "$code"
+    assert_contains "fast-forward: says so" "$out" "but not through a merge commit; not tagging it"
+    assert_eq "fast-forward: not tagged" "" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+}
+
 # --- Run -------------------------------------------------------------------
 
 test_merge_requires_dev() {
@@ -2001,6 +2088,8 @@ test_prerelease_push_failure_warns
 test_stalled_fetch_stops_cycle
 test_local_cycle_resume
 test_local_release_finished_remotely
+test_merged_release_resumes_tag
+test_merged_release_refusals
 test_checks_pass_then_merge
 test_checks_fail_stops_merge
 test_checks_none_reported
