@@ -225,7 +225,7 @@ When a release stops partway, it prints the error git or gh gave, a row naming t
 
 `stanza release merge` resumes a release that is already merged and tagged, and is a no-op once the dev cycle is done. With `--json`, a failed run emits `"ok": false` with `failed_step`, `completed_steps`, `error`, `resume`, and `hint` (which holds the recovery text when `resume` is `null`). `stanza guide` documents the fields.
 
-Before it changes anything, a release checks what its phase needs: the branch, a clean tree, `dev` level with origin, `gh` authentication, the target tag free in this clone and on origin and above the latest version tag, and for `release merge` the open PR. It reports every failed check in one run (in `--json`, as an `errors` list), and `--check` runs only these checks.
+Before it changes anything, a release checks what its phase needs: the branch, a clean tree, `dev` level with origin, `gh` authentication, the target tag free in this clone and on origin and above the latest version tag, the base branch on origin (with `--no-pr`, not diverged from the local one), and for `release merge` the open PR. It reports every failed check in one run (in `--json`, as an `errors` list), and `--check` runs only these checks.
 
 The merge waits for CI: the release PR's checks, or with `--no-pr` the workflow runs on `dev`'s head. A failed or cancelled check stops the release before the merge, with the PR left open; fix it on `dev`, push, and run `stanza release merge`. A repository with no checks releases as before. A release also refuses to bump a `dev` whose head already failed CI. `STANZA_CHECKS_TIMEOUT` (seconds, default 1800; `0` for no limit) bounds the wait, and `--skip-checks` bypasses it.
 

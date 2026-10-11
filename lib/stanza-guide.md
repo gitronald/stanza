@@ -123,7 +123,8 @@ everything the phase needs, and reports every failure in one run:
   `pr`);
 - the target tag: free in this clone and on origin, and above the latest
   version tag (a prerelease must also sort above it);
-- `origin` has the base branch;
+- `origin` has the base branch, and with `--no-pr` the local base branch has
+  not diverged from it;
 - for `release merge`: the PR is open, targets the base branch, its head is
   local `dev`, and its title is the tag. Without `--no-pr`, an alpha version
   is refused.

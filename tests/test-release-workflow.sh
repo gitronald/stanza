@@ -841,25 +841,49 @@ test_no_pr_merge_phase_protected_skips_pr_create() {
     teardown_remote_repo
 }
 
-test_no_pr_diverged_base_hint() {
+test_no_pr_diverged_base_refused() {
     echo ""
-    echo "--no-pr with a diverged base branch: the hint returns to dev first"
-    setup_remote_repo
+    echo "--no-pr with a diverged base branch: refused before the bump"
+    local phase err exit_code
+    for phase in full merge; do
+        setup_remote_repo
+        # merge: a pr phase has promoted dev to the release version.
+        if [[ "$phase" == merge ]]; then
+            echo "0.1.0" > VERSION
+            git commit -q -am "version [patch]: 0.1.0"
+            git push -q origin dev
+        fi
 
+        git checkout -q main
+        git commit -q --allow-empty -m "local only"
+        git checkout -q -b remote-side origin/main
+        git commit -q --allow-empty -m "remote only"
+        git push -q origin remote-side:main
+        git checkout -q dev
+        git branch -q -D remote-side
+        preflight_snapshot
+
+        local args=(release patch -y --no-pr)
+        [[ "$phase" == merge ]] && args=(release merge -y --no-pr)
+        exit_code=0
+        err=$(NO_COLOR=1 "$STANZA" "${args[@]}" 2>&1) || exit_code=$?
+        assert_eq "$phase: exits non-zero" "1" "$exit_code"
+        assert_contains "$phase: names the divergence" "$err" \
+            "main has diverged from origin/main"
+        assert_contains "$phase: shows how to compare" "$err" \
+            "git log --oneline --left-right main...origin/main"
+        preflight_unchanged "$phase, diverged base"
+        teardown_remote_repo
+    done
+
+    # A local base ahead of origin's still fast-forwards (the pull is a no-op).
+    setup_remote_repo
     git checkout -q main
     git commit -q --allow-empty -m "local only"
-    git checkout -q -b remote-side origin/main
-    git commit -q --allow-empty -m "remote only"
-    git push -q origin remote-side:main
     git checkout -q dev
-    git branch -q -D remote-side
-
-    local err exit_code=0
-    err=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || exit_code=$?
-    assert_eq "exits non-zero" "1" "$exit_code"
-    assert_contains "hint checks out dev before the merge phase" "$err" \
-        "git checkout dev && stanza release merge --no-pr"
-
+    exit_code=0
+    NO_COLOR=1 "$STANZA" release patch --no-pr --check >/dev/null 2>&1 || exit_code=$?
+    assert_eq "base ahead of origin: check passes" "0" "$exit_code"
     teardown_remote_repo
 }
 
@@ -1901,7 +1925,7 @@ test_no_pr_merge_phase
 test_no_pr_protected_base_pushes_nothing
 test_no_pr_ignored_flags_warn
 test_no_pr_merge_phase_protected_skips_pr_create
-test_no_pr_diverged_base_hint
+test_no_pr_diverged_base_refused
 test_no_pr_ignored_by_prerelease
 test_pr_path_push_failure_hints_dev_cycle
 test_failed_step_is_named

@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merge, or tag, and reports every failed check in one run. New checks catch
   what used to stop a release halfway: a target tag that already exists in
   this clone or on origin (which left the base branch merged and untagged), a
-  target below the latest version tag, and a missing base branch on origin.
+  target below the latest version tag, a missing base branch on origin, and
+  with `--no-pr` a local base branch that has diverged from origin's (which
+  stopped the merge after the bump was pushed).
   With `--json`, the failure document lists every failure in `errors`.
 
 ### Fixed

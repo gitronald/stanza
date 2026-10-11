@@ -1543,9 +1543,29 @@ preflight_branch_level() {
     preflight_fail "$branch is not level with origin/$branch ($ahead ahead, $behind behind)" "$hint"
 }
 
+# For a merge without a PR: record a failure when the local base branch and
+# origin's have diverged, after fetching it. The merge step pulls the base with
+# --ff-only, which would refuse only after the bump is pushed. A clone with no
+# local base branch passes: the checkout creates it from origin's.
+preflight_base_fast_forward() {
+    local out
+    git rev-parse -q --verify "refs/heads/$BASE_BRANCH" >/dev/null || return 0
+    if ! out=$(git_net fetch origin "$BASE_BRANCH" 2>&1); then
+        preflight_fail "Could not fetch from origin/$BASE_BRANCH" "" "$out"
+        return 0
+    fi
+    if git merge-base --is-ancestor "origin/$BASE_BRANCH" "$BASE_BRANCH" ||
+        git merge-base --is-ancestor "$BASE_BRANCH" "origin/$BASE_BRANCH"; then
+        return 0
+    fi
+    preflight_fail "$BASE_BRANCH has diverged from origin/$BASE_BRANCH; the merge without a PR cannot fast-forward it" \
+        "reconcile them first (git log --oneline --left-right $BASE_BRANCH...origin/$BASE_BRANCH shows both sides)"
+}
+
 # Read the base branch and the version tags on origin in one call into
 # REMOTE_TAGS (tag names, one per line). Records a failure when origin cannot
-# be read, or, for a release that merges into it, has no base branch.
+# be read, or, for a release that merges into it, has no base branch, or (for
+# a merge without a PR) a base branch the local one has diverged from.
 REMOTE_TAGS=""
 preflight_remote_refs() {
     local out
@@ -1559,6 +1579,8 @@ preflight_remote_refs() {
     if ! printf '%s\n' "$out" | awk -v ref="refs/heads/$BASE_BRANCH" '$2 == ref { found = 1 } END { exit !found }'; then
         preflight_fail "origin has no $BASE_BRANCH branch to release into" \
             "push it first: git push -u origin $BASE_BRANCH"
+    elif [[ "$NO_PR" == "true" && "$PHASE" != "pr" ]]; then
+        preflight_base_fast_forward
     fi
 }
 
