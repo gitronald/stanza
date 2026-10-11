@@ -18,7 +18,7 @@ REPO_URL="${STANZA_REPO_URL:-https://github.com/gitronald/stanza}"
 SOURCE_DIR=""
 FETCH_DIR=""
 FETCH_VERSION=""
-# Where completions go when $PREFIX/share cannot be written; these need a
+# Where completions go when ~/.local/share cannot be written; these need a
 # line in the shell startup file, so install_completions checks for them
 BASH_COMPLETION_FALLBACK="$HOME/.bash_completion.d/stanza"
 ZSH_COMPLETION_FALLBACK="$HOME/.zsh/completions/_stanza"
@@ -414,10 +414,13 @@ fetch_release() {
 }
 
 # Where a completion goes: $PREFIX/share/$1 when that directory can be
-# written (or created), otherwise the per-user fallback $2
+# written (or created), otherwise the per-user fallback $2. A --prefix other
+# than ~/.local always uses its own share/, created as needed, so its
+# completions stay out of $HOME.
 completion_dest() {
     local dir="$PREFIX/share/$1"
-    if [[ $EUID -eq 0 || -w "$dir" ]] || [[ ! -e "$dir" && -w "$PREFIX/share" ]]; then
+    if [[ "$PREFIX" != "$HOME/.local" || $EUID -eq 0 || -w "$dir" ]] \
+        || [[ ! -e "$dir" && -w "$PREFIX/share" ]]; then
         printf '%s' "$dir/$(basename "$2")"
     else
         printf '%s' "$2"

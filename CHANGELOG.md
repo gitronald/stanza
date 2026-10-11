@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt use light blue. Both are 256-color codes. `warn`, `hint`, `error`,
   and `done` keep their colors.
 
+### Fixed
+
+- `install.sh --prefix=PATH` put shell completions in `~/.bash_completion.d`
+  and `~/.zsh/completions` when `PATH/share` did not exist yet. A prefix other
+  than `~/.local` now keeps them under its own `share/`, created as needed.
+
 ## [1.2.2] - 2026-10-10
 
 ### Changed

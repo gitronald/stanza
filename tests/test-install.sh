@@ -383,6 +383,17 @@ assert_not_contains "no fallback hint" "$out" "fpath="
 assert_eq "share path used" "yes" \
     "$([[ -f "$HOME/.local/share/zsh/site-functions/_stanza" ]] && echo yes || echo no)"
 
+echo "A custom prefix keeps its completions under it"
+setup
+custom="$CASE_TMP/custom"
+out=$("$INSTALLER" --yes --prefix="$custom" 2>&1)
+assert_eq "bash under the prefix's new share/" "yes" \
+    "$([[ -f "$custom/share/bash-completion/completions/stanza" ]] && echo yes || echo no)"
+assert_eq "zsh under the prefix's new share/" "yes" \
+    "$([[ -f "$custom/share/zsh/site-functions/_stanza" ]] && echo yes || echo no)"
+assert_eq "nothing written under HOME" "" "$(ls -A "$HOME")"
+assert_not_contains "no fallback hint" "$out" "fpath="
+
 echo "Rows omitted for files that are not installed"
 setup
 mkdir -p "$HOME/.claude"
