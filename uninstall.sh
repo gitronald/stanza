@@ -60,7 +60,7 @@ warn() { row warn "$1" 2 "$SGR_WARN"; }
 hint() { row hint "$1" 2 "$SGR_HINT"; }
 error() { row error "$1" 2 "$SGR_ERROR"; }
 more() { row "" "$1" 2; }
-done_row() { row done "$1" 1 "$SGR_DONE"; }
+done_row() { row "done" "$1" 1 "$SGR_DONE"; }
 plan_row() { row "$1" "$2" 1 "$SGR_PLAN"; }
 
 # $1 with a leading $HOME shown as ~

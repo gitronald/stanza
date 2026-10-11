@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- CI runs the test suite on every push and pull request to `dev` and `main`:
+  on Linux, on macOS's own `/bin/bash` 3.2 (the oldest bash stanza supports),
+  and through ShellCheck, which now reports no findings in the shipped
+  scripts. `tests/run.sh` is the one entry point for CI and for local runs.
+- A test matrix holds every command with a JSON shape to its output contract
+  under each verbosity, in text and `--json` mode, on success and on failure.
+
+### Changed
+
+- `stanza init` and `stanza rules` print a failure document on stdout under
+  `--json` (`"ok": false`, with `error` and `hint`), as `stanza release`
+  does, and their success documents carry `"ok": true`. They used to print
+  nothing on stdout when they failed.
+- `stanza release` under `--json` prints its failure document for a usage
+  error too (an unknown option, a missing bump type), with `failed_step`
+  `"preflight"`.
+- The "Use -h or --help" line after an unknown option goes to stderr, so it
+  no longer lands ahead of the JSON document on stdout.
+
 ## [1.4.0] - 2026-10-11
 
 ### Added

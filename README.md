@@ -1,5 +1,7 @@
 # Stanza - Version Management with Git + GitHub
 
+[![test](https://github.com/gitronald/stanza/actions/workflows/test.yml/badge.svg)](https://github.com/gitronald/stanza/actions/workflows/test.yml)
+
 Simple semantic versioning workflow with Git and GitHub. Supports Python projects (via uv) and plain version files.
 
 Stanza handles two distinct workflows:
@@ -190,7 +192,7 @@ These flags can be passed before the subcommand (or, for back-compat, after):
 |------|--------|
 | `-q`, `--quiet` | Reduce output to a single line: the new version (release), repo URL (init). Errors still print. |
 | `-v`, `--verbose` | Show step internals (pre-checks, remote-skip context). Stack as `-vv` to dump every git/gh command. |
-| `--json` | Emit a single JSON document on stdout (`schema_version: 1`). Suppresses the human banner; errors still go to stderr. |
+| `--json` | Emit a single JSON document on stdout (`schema_version: 1`), with `ok` saying whether the run succeeded. A failed run still prints one, with `ok: false` and the `error` and `hint`. Suppresses the human banner; errors still go to stderr. |
 | `--no-color` | Disable ANSI color. Also honored: the `NO_COLOR` env var. |
 
 `--quiet` and `--verbose` are mutually exclusive. `--json` takes over stdout regardless of verbosity.
@@ -444,9 +446,20 @@ The stanza tool is organized as follows:
 - `lib/stanza-rules` - Claude Code rule subcommand (print, install, check, uninstall)
 - `lib/stanza-rules.md` - Rule text rendered by `stanza rules`
 - `completions/` - Shell completion files for bash and zsh
-- `tests/` - Version bump test suite
+- `tests/` - Test suite; `tests/run.sh` runs it
 - `install.sh` / `uninstall.sh` - Installation scripts
 - `scripts/release-asset.sh` - Builds and publishes the installer's release asset (run by `.github/workflows/release-asset.yml`)
+
+### Running the tests
+
+```bash
+tests/run.sh                      # every tests/test-*.sh, with a summed total
+tests/run.sh -v                   # stream each file's output
+tests/run.sh tests/test-rules.sh  # just the files named
+/bin/bash tests/run.sh            # the whole suite on a given bash (3.2 on macOS)
+```
+
+The suite needs `git`, `jq`, and `uv`. CI (`.github/workflows/test.yml`) runs it on Linux and on macOS's `/bin/bash` 3.2, and holds the shipped scripts and `tests/run.sh` to zero ShellCheck findings.
 
 ### Compatibility Notes
 

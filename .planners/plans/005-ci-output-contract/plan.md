@@ -1,11 +1,11 @@
 ---
 id: 5
 slug: ci-output-contract
-status: active
+status: done
 branch: feature/ci-output-contract
 created: 2026-10-09T18:49:08-07:00
-concluded:
-pr:
+concluded: 2026-10-11T04:41:39-07:00
+pr: https://github.com/gitronald/stanza/pull/20
 ---
 
 # Add CI with an output-mode matrix and a bash 3.2 job
@@ -87,3 +87,121 @@ on whatever bash that machine has (5.x here). Two gaps follow.
   - Base: `dev` at `decba7b`
   - Worktree: `.worktrees/ci-output-contract`
   - PR: pending
+- **2026-10-11T02:07:06-07:00** — PR opened: https://github.com/gitronald/stanza/pull/20
+- **2026-10-11T02:22:45-07:00** — Implemented, CI green on all three jobs
+  (run 38127818430 at `a76f189`): Linux bash 5.2 and macOS `/bin/bash`
+  3.2.57 each ran 1471 checks with 0 failed, and ShellCheck 0.11.0 reported
+  no findings.
+  - **ShellCheck cleanup first.** The code had moved since the trial: 31
+    findings, not 27 (no `PURPLE`; four SC2155, all inside `$(...)` call
+    sites, so the splits change nothing; new SC1010, SC2088, and SC2206). A
+    `.shellcheckrc` (`external-sources`, `source-path=SCRIPTDIR`) plus
+    `# shellcheck source=` directives cleared the SC1091 and the cross-file
+    SC2034. `version_lt` splits with `read -r -a`; the bash completion uses a
+    `while read` loop. The checked set is the shipped scripts plus
+    `tests/run.sh`; the `tests/test-*.sh` files are not checked.
+  - **Runner.** `tests/run.sh` runs each file under its own bash and puts a
+    `bash` shim for that bash first on PATH, so `/bin/bash tests/run.sh`
+    runs stanza's `#!/usr/bin/env bash` on 3.2 too, with no test edits. It
+    sets `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, so local
+    runs see what a fresh CI machine sees.
+  - **Matrix.** `tests/test-output-contract.sh`: six rows (release
+    full/pr/merge/prerelease, init, rules install) x 4 verbosities x text and
+    `--json` x success and each forced failure (a failing pre-commit hook and
+    a dirty tree for release, a failing `gh` for init, a hand-written rule
+    file for rules install): 366 checks in about 15s. Validated with `jq`.
+    Three mutations on a scratch copy were each caught: the header printed
+    to stdout under `--json` (48 failures), `rules install -q` printing
+    nothing (1), and a failed release exiting 0 (64).
+  - **Found: `init` and `rules install` print nothing on stdout under
+    `--json` when they fail**, where a release prints an `ok:false`
+    document. The matrix records today's behavior (empty stdout) per row;
+    see Handoff question 1.
+  - **zsh** is a test file (`tests/test-completion-zsh.sh`) rather than a
+    workflow step, so humans run it through the same runner. It installs the
+    file as `_stanza` on `fpath`, runs `compinit`, and checks the mapping and
+    `autoload +X`. Sourcing the file directly is not the check: its last line
+    calls `_stanza`, which needs a completion context. It skips without zsh
+    (Linux CI) and ran 3 checks on macOS.
+  - **CI caught two test bugs**, both fixed in the tests:
+    `test-version-bumps.sh` and `test-version-file-detection.sh` relied on a
+    global git identity, and `test-rules.sh` expected the unresolved temp
+    path where git reports the physical one (`/var` -> `/private/var`).
+- **2026-10-11T02:23:07-07:00** — Implemented: 9 commits ahead of `dev`.
+
+- **2026-10-11T02:35:03-07:00** — Review follow-up (code review at
+  medium: 12 candidates, 5 findings kept, all fixed in `a44140a` and `c72a286`;
+  CI run 38128579721 green, 1495 checks on Linux and on macOS bash 3.2.57).
+  - Fixed: failure cases now assert the release's `failed_step` (hook:
+    `bump`, or `cycle` for merge; dirty tree: `preflight`). A mutation that
+    reports every failure as `preflight` gives 16 failures.
+  - Fixed: `--json` success documents are checked for the `-q` value through
+    a per-row jq filter (`.to_version`, `.tag.name[1:]`, `.repo_url`,
+    `.path`). A wrong `repo_url` gives 4 failures.
+  - Fixed: an early return skipped `cleanup` and leaked the case's temp dir.
+  - Fixed: `eval` for `$T` was replaced by an `@T@` placeholder.
+  - Fixed: README and CHANGELOG now scope the zero-findings claim to the
+    shipped scripts and `tests/run.sh`. `tests/*.sh` carry 35 findings and
+    are not checked.
+  - No-op: per-file git identity blocks stay, since each test runs
+    standalone. The overlap with `test-output-modes.sh` is partial (values
+    there, shape and failures here). The per-case repo rebuild stays (about
+    10s).
+- **2026-10-11T04:32:08-07:00** — Reactivated: back to active after review.
+
+- **2026-10-11T04:46:49-07:00** — Failure documents for `init` and `rules`
+  (Handoff question 1, answered at the review gate: do it in this PR).
+  Commits `deb04d5`..`80d9bd5`; CI run 38136500434 green, 1685 checks on
+  Linux and on macOS bash 3.2.57.
+  - `lib/stanza-common`: `json_failure_trap COMMAND [ACTION]` sets an EXIT
+    trap that, on a non-zero exit under `--json`, prints
+    `{"command","action"?,"ok":false,"error","hint"}`. `json_emit` sets
+    `JSON_EMITTED`, so a command that already printed its document
+    (`rules check` exits 1 when the rule drifted) gets no second one.
+  - `init` and `rules` documents carry `ok`. `rules check` sets it from its
+    status, so `ok` matches the exit status.
+  - Release's trap now sits before argument parsing, so a usage error
+    (unknown option, missing bump type) gets its failure document, with
+    `failed_step: "preflight"`. `scan_json_flag` finds a `--json` placed
+    after the bad option (raised by the delta review). The "Use -h or
+    --help" line moved to stderr in all three commands.
+  - Matrix: init and rules failures expect a document. A `usage` failure
+    runs on every row. `-q` text failures print nothing on stdout. Targeted
+    cases cover `rules check` drift and `--json` placed last. 580 checks.
+    Mutations caught: no init trap (8), no `JSON_EMITTED` guard (2), the
+    usage line back on stdout (5), no release trap (48), and no prescan (3).
+  - Delta review (correctness, low): one finding, the `--json`-last case,
+    fixed as above.
+- **2026-10-11T04:47:06-07:00** — Implemented: 19 commits ahead of `dev`.
+## Handoff
+
+- **State.** All work is committed and pushed on
+  `feature/ci-output-contract` (PR #20); CI is green, and the review gate ran
+  on the full diff and on the follow-up delta.
+- **Questions.**
+  1. Should `init` and `rules` emit a failure document under `--json`?
+     **Answered 2026-10-11: yes, in this PR.** Done; see the 04:46 Log entry.
+- **Not verified.** The badge renders only once `test.yml` runs on `main`,
+  so it shows no status until the next release merges.
+
+## Retrospective
+
+- The first CI run paid for itself straight away. It caught two tests that
+  leaned on a global git identity, and a macOS-only path mismatch
+  (`/var` -> `/private/var`), none of which a local run could see. Isolating
+  git config in `tests/run.sh` means local runs now see the identity problem
+  too.
+- bash 3.2 held up: the whole suite passed on macOS `/bin/bash` on its first
+  run. The `bash` shim in `tests/run.sh` was enough to put stanza itself on
+  3.2, with no change to any test.
+- The matrix earned its keep only once it checked content as well as shape.
+  The first version checked exit codes and parseability, and the review
+  showed that it could not tell which step failed or whether the payload was
+  right. Mutation runs on a scratch copy were the quickest way to show that
+  each new assertion bites.
+- The plan's ShellCheck trial was two days stale and the count had moved
+  (31 findings, not 27). Re-measuring before acting was the right call.
+- Building the matrix found a gap in the contract: `init` and `rules` printed
+  nothing on failure under `--json`. Pinning today's behavior and holding the
+  question for the gate kept the run moving, and the answer turned into a
+  small, well-tested change.
