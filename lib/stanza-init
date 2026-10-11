@@ -4,6 +4,7 @@
 set -e
 
 # Source shared utilities
+# shellcheck source=stanza-common
 source "$(dirname "${BASH_SOURCE[0]:-$0}")/stanza-common"
 
 # Default values

@@ -5,6 +5,7 @@
 set -e
 
 # Source shared utilities
+# shellcheck source=stanza-common
 source "$(dirname "${BASH_SOURCE[0]:-$0}")/stanza-common"
 
 RULES_SOURCE="$STANZA_LIB_DIR/stanza-rules.md"

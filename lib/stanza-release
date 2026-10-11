@@ -3,6 +3,7 @@
 set -e
 
 # Source shared utilities
+# shellcheck source=stanza-common
 source "$(dirname "${BASH_SOURCE[0]:-$0}")/stanza-common"
 
 
@@ -444,7 +445,8 @@ print_doc_sync_rows() {
 # Bump version using the detected project type and return new version
 bump_version() {
     local bump_type="$1"
-    local old_version=$(get_current_version)
+    local old_version
+    old_version=$(get_current_version)
     local project_type
     project_type=$(detect_project_type)
 
@@ -475,7 +477,8 @@ bump_version() {
             ;;
     esac
 
-    local new_version=$(get_current_version)
+    local new_version
+    new_version=$(get_current_version)
     if [[ $VERBOSE == "true" ]]; then
         echo "version update [$(get_current_branch)] : $old_version ⟶ $new_version" >&2
     fi
@@ -486,7 +489,8 @@ bump_version() {
 # Set specific version using the detected project type and return new version
 set_version() {
     local target_version="$1"
-    local old_version=$(get_current_version)
+    local old_version
+    old_version=$(get_current_version)
     local project_type
     project_type=$(detect_project_type)
 
@@ -505,7 +509,8 @@ set_version() {
             ;;
     esac
 
-    local new_version=$(get_current_version)
+    local new_version
+    new_version=$(get_current_version)
     if [[ $VERBOSE == "true" ]]; then
         echo "version update [$(get_current_branch)] : $old_version ⟶ $new_version" >&2
     fi
@@ -1634,7 +1639,9 @@ version_lt() {
     [[ "$1" == *a* ]] && a_pre="${1#*a}"
     [[ "$2" == *a* ]] && b_pre="${2#*a}"
     local IFS=.
-    local a=(${1%%a*}) b=(${2%%a*})
+    local a b
+    read -r -a a <<< "${1%%a*}"
+    read -r -a b <<< "${2%%a*}"
     for i in 0 1 2; do
         x=$((10#${a[i]:-0}))
         y=$((10#${b[i]:-0}))

@@ -148,6 +148,7 @@ fi
 export VERBOSITY JSON_OUTPUT NO_COLOR_OVERRIDE VERBOSE QUIET_REQUESTED VERBOSE_REQUESTED
 
 # Run mutual-exclusion check for the no-subcommand and `version` cases too.
+# shellcheck source=../lib/stanza-common
 source "$STANZA_LIB_DIR/stanza-common"
 check_verbosity_exclusion
 
@@ -166,6 +167,7 @@ case "$COMMAND" in
     release)
         # Source and run stanza-release
         if [[ -f "$STANZA_LIB_DIR/stanza-release" ]]; then
+            # shellcheck source=../lib/stanza-release
             source "$STANZA_LIB_DIR/stanza-release"
         else
             echo "Error: stanza-release not found in $STANZA_LIB_DIR" >&2
@@ -176,6 +178,7 @@ case "$COMMAND" in
     init)
         # Source and run stanza-init
         if [[ -f "$STANZA_LIB_DIR/stanza-init" ]]; then
+            # shellcheck source=../lib/stanza-init
             source "$STANZA_LIB_DIR/stanza-init"
         else
             echo "Error: stanza-init not found in $STANZA_LIB_DIR" >&2
@@ -203,6 +206,7 @@ case "$COMMAND" in
     rules)
         # Source and run stanza-rules
         if [[ -f "$STANZA_LIB_DIR/stanza-rules" ]]; then
+            # shellcheck source=../lib/stanza-rules
             source "$STANZA_LIB_DIR/stanza-rules"
         else
             echo "Error: stanza-rules not found in $STANZA_LIB_DIR" >&2

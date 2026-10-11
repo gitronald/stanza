@@ -1,0 +1,4 @@
+# Follow `source` statements; their targets are named by `# shellcheck source=`
+# directives, resolved against each script's own directory
+external-sources=true
+source-path=SCRIPTDIR

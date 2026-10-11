@@ -29,6 +29,7 @@ JSON_OUTPUT="${JSON_OUTPUT:-false}"
 NO_COLOR_OVERRIDE="${NO_COLOR_OVERRIDE:-false}"
 QUIET_REQUESTED="${QUIET_REQUESTED:-false}"
 VERBOSE_REQUESTED="${VERBOSE_REQUESTED:-false}"
+VERBOSE="${VERBOSE:-false}"
 
 # Validate that --quiet and --verbose were not both requested at any level.
 # Call after subcommand argument parsing.
@@ -94,7 +95,7 @@ print_row() {
 print_done() {
     [[ "$JSON_OUTPUT" == "true" ]] && return 0
     [[ "$VERBOSITY" -lt 1 ]] && return 0
-    _print_label_row "$GREEN" done "$1"
+    _print_label_row "$GREEN" "done" "$1"
 }
 
 # Print a hint row to stderr (remediation suggestion).
@@ -222,6 +223,7 @@ print_warning() {
 # printed inside $(...) still reaches the caller's exit trap.
 STANZA_LAST_ERROR=""
 STANZA_ERROR_LOG=""
+# shellcheck disable=SC2034  # STANZA_LAST_ERROR is read by stanza-release
 print_error() {
     STANZA_LAST_ERROR="$1"
     STANZA_HINTS=""
