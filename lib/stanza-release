@@ -64,8 +64,12 @@ release_failure_advice() {
     [[ "$NO_PR" == "true" ]] && merge_flags="$merge_flags --no-pr"
     [[ "$NO_DEV_PRERELEASE" == "true" && "$PHASE" != "pr" ]] && merge_flags="$merge_flags --no-dev-cycle"
     local resume_merge="stanza release merge$merge_flags$yes"
-    # The same command again resumes at the push and the PR (find_unfinished_bump).
-    local rerun="stanza release $CMD_LABEL$merge_flags$yes"
+    # The same command again resumes at the push and the PR (find_unfinished_bump),
+    # with every flag the PR and the merge still read.
+    local rerun_flags="$merge_flags"
+    [[ -n "$PR_NOTE" ]] && rerun_flags="$rerun_flags --pr-note $(printf '%q' "$PR_NOTE")"
+    [[ "$SKIP_CHECKS" == "true" ]] && rerun_flags="$rerun_flags --skip-checks"
+    local rerun="stanza release $CMD_LABEL$rerun_flags$yes"
     local manual
     FAILED_STATE=""
     RESUME_CMD=""
@@ -1524,14 +1528,23 @@ find_merged_release() {
             "compare them (git diff dev ${commit:0:7}), then tag by hand: git tag $tag ${commit:0:7} && git push origin refs/tags/$tag"
         return 1
     fi
+    # git_tag_version pushes the base branch with the tag: it must carry
+    # nothing origin's lacks.
+    local base_sha
+    base_sha=$(git rev-parse -q --verify "refs/heads/$BASE_BRANCH") || base_sha=""
+    if [[ -n "$base_sha" ]] && ! git merge-base --is-ancestor "$base_sha" "origin/$BASE_BRANCH"; then
+        preflight_fail "$BASE_BRANCH has commits that origin/$BASE_BRANCH lacks; not pushing them with $tag" \
+            "check them (git log --oneline origin/$BASE_BRANCH..$BASE_BRANCH), push or drop them by hand, then: git checkout dev && stanza release merge"
+        return 1
+    fi
     MERGED_RELEASE_COMMIT="$commit"
     SHIPPED_TAG="$tag"
 }
 
-# Resume a release that find_merged_release found: bring the base branch level
-# with origin, which carries the merge, so git_tag_version can push it with the
-# tag. Sets RELEASE_PR_NUMBER (and RELEASE_PR_URL) when the merge subject names
-# the PR.
+# Resume a release that find_merged_release found: fast-forward the base branch
+# to origin's, which find_merged_release fetched and which carries the merge, so
+# git_tag_version can push it with the tag. Sets RELEASE_PR_NUMBER (and
+# RELEASE_PR_URL) when the merge subject names the PR.
 resume_merged_release() {
     local commit="$1" subject re=' - PR #([0-9]+)$'
     step_start merge
@@ -1542,7 +1555,7 @@ resume_merged_release() {
         RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
     fi
     git_quiet checkout "$BASE_BRANCH"
-    git_quiet pull --ff-only origin "$BASE_BRANCH"
+    git_quiet merge --ff-only "origin/$BASE_BRANCH"
     print_row merge "${RELEASE_PR_NUMBER:+#$RELEASE_PR_NUMBER }merged into $BASE_BRANCH earlier (${commit:0:7}); resuming"
     step_done
 }
@@ -1794,24 +1807,26 @@ find_unfinished_bump() {
     fi
 }
 
-# For a run that resumes an unfinished bump through a PR: record a failure when
-# dev's head is already merged into origin's base branch, which the merge phase
-# finishes, and take the release PR an earlier run opened into
-# RESUME_PR_NUMBER, after checking that its title is the tag.
+# For a run that resumes an unfinished bump against the remote: record a
+# failure when dev's head is already merged into origin's base branch, which the
+# merge phase finishes. Through a PR, also take the release PR an earlier run
+# opened into RESUME_PR_NUMBER, after checking that its title is the tag.
 # Usage: preflight_resumed_bump <tag> <gh_ok>
 RESUME_PR_NUMBER=""
 preflight_resumed_bump() {
-    local tag="$1" gh_ok="$2" out pr title
-    release_uses_pr || return 0
+    local tag="$1" gh_ok="$2" out pr title merge_cmd="stanza release merge"
+    should_skip_remote && return 0
+    [[ "$NO_PR" == "true" ]] && merge_cmd="$merge_cmd --no-pr"
     if ! out=$(git_net fetch origin "$BASE_BRANCH" 2>&1); then
         preflight_fail "Could not fetch from origin/$BASE_BRANCH" "" "$out"
         return 0
     fi
     if git merge-base --is-ancestor dev "origin/$BASE_BRANCH"; then
         preflight_fail "$tag is already merged into $BASE_BRANCH, untagged" \
-            "finish it: stanza release merge"
+            "finish it: $merge_cmd"
         return 0
     fi
+    release_uses_pr || return 0
     [[ "$gh_ok" == "true" ]] || return 0
     pr=$(gh_get_last_open_pr_number 2>/dev/null) || pr=""
     [[ -n "$pr" ]] || return 0

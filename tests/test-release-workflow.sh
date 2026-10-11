@@ -1325,6 +1325,23 @@ test_merged_release_refusals() {
     assert_contains "fast-forward: says so" "$out" "but not through a merge commit; not tagging it"
     assert_eq "fast-forward: not tagged" "" "$(git tag -l v0.1.0)"
     teardown_remote_repo
+
+    # Local main has a commit origin's lacks: not pushed along with the tag.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    gh pr merge 1 --merge --subject "version [release]: v0.1.0 - PR #1" >/dev/null 2>&1
+    git checkout -q main
+    git commit -q --allow-empty -m "unreleased"
+    git checkout -q dev
+    local origin_main
+    origin_main=$(remote_sha main)
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "main ahead: exits 1" "1" "$code"
+    assert_contains "main ahead: says so" "$out" "main has commits that origin/main lacks; not pushing them with v0.1.0"
+    assert_eq "main ahead: origin/main unchanged" "$origin_main" "$(remote_sha main)"
+    assert_eq "main ahead: tag not pushed" "" "$(remote_sha v0.1.0)"
+    teardown_remote_repo
 }
 
 # The number of patch bump commits on dev.
@@ -1413,6 +1430,21 @@ EOF
     assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
     assert_eq "one patch bump" "1" "$(patch_bumps)"
     teardown_remote_repo
+
+    # The re-run keeps the flags the PR and the merge read.
+    setup_remote_repo
+    arm_step_failure pr >/dev/null
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y --pr-note "a note" --skip-checks 2>&1) || code=$?
+    assert_eq "flags: exits 1" "1" "$code"
+    assert_contains "flags: resume keeps them" "$out" \
+        "resume: stanza release patch --pr-note a\\ note --skip-checks -y"
+    rm "$GH_MOCK_STATE/create_fail"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch --pr-note a\ note --skip-checks -y 2>&1) || code=$?
+    assert_eq "flags: resume exits 0" "0" "$code"
+    assert_contains "flags: PR body has the note" "$(cat "$GH_MOCK_STATE/body")" "a note"
+    teardown_remote_repo
 }
 
 test_unfinished_bump_refusals() {
@@ -1442,6 +1474,28 @@ test_unfinished_bump_refusals() {
     assert_contains "merged: says so" "$out" "v0.1.0 is already merged into main, untagged"
     assert_contains "merged: hints the merge phase" "$out" "finish it: stanza release merge"
     assert_eq "merged: not bumped" "0.1.0" "$(cat VERSION)"
+    teardown_remote_repo
+
+    # The same, without a PR: main was merged and pushed by hand.
+    setup_remote_repo
+    arm_step_failure push >/dev/null
+    NO_COLOR=1 "$STANZA" release patch -y --no-pr >/dev/null 2>&1 || true
+    rm "$TEST_TMPDIR/remote.git/hooks/update"
+    git push -q origin dev
+    git checkout -q main
+    git merge -q --no-ff dev -m "merge dev"
+    git push -q origin main
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y --no-pr 2>&1) || code=$?
+    assert_eq "merged, no PR: exits 1" "1" "$code"
+    assert_contains "merged, no PR: says so" "$out" "v0.1.0 is already merged into main, untagged"
+    assert_contains "merged, no PR: hints the merge phase" "$out" "finish it: stanza release merge --no-pr"
+    assert_eq "merged, no PR: not tagged" "" "$(git tag -l v0.1.0)"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y --no-pr 2>&1) || code=$?
+    assert_eq "merged, no PR: the hint finishes it" "0" "$code"
+    assert_eq "merged, no PR: tag is the merge" "$(remote_sha main)" "$(remote_sha v0.1.0)"
     teardown_remote_repo
 
     # Released with --no-dev-cycle: the tag exists, so this is a new release.
