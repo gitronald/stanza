@@ -24,6 +24,8 @@ stanza release merge -y              # merge the PR, tag, open the next cycle
   pin the target: `stanza release merge <pr-number>`.
 - Phase 2 refuses to merge if `dev` advanced past the reviewed PR head, so new
   commits can't sneak into the tagged release.
+- Phase 2 waits for the PR's checks before it merges (see *CI checks*), so
+  there is no need to poll them yourself first.
 - Phase 2 also resumes a release that stopped after its merge: re-run
   `stanza release merge -y` (see *When a release stops partway*).
 
@@ -74,10 +76,45 @@ refuses both: no tag lands on the remote. The bump is already on `origin/dev`
 by then, and the error names the recovery: reset the local base branch to its
 remote, open the PR, and run `stanza release merge`.
 
+## CI checks
+
+A release does not merge on a red or unfinished CI:
+
+- **The merge waits for the PR's checks.** After the PR is verified and before
+  it is merged, stanza polls its checks until all have finished. A failed or
+  cancelled check stops the release at the `checks` step, with the PR open and
+  nothing merged or tagged. Fix it on `dev` and push (the PR picks up the
+  fix), then `stanza release merge -y`.
+- **No checks is a pass.** A repository without CI reports `checks  none
+  reported` after a short grace period for checks to register.
+- **`--no-pr` reads the workflow runs on `dev`'s head** (`gh run list`) the
+  same way. Without `gh`, or with a remote `gh` cannot read, it says so and
+  merges. `--local` has no CI to read.
+- **A red `dev` is not bumped.** Before the version bump, a full release and
+  `release pr` refuse when a workflow run on `dev`'s head has failed. Runs
+  still in progress are left to the merge gate.
+- **The wait is bounded** by `STANZA_CHECKS_TIMEOUT` (seconds, default 1800;
+  `0` waits without limit). A timeout leaves the PR open; `stanza release
+  merge -y` waits again.
+- **`--skip-checks`** merges without waiting and bumps a red `dev`, for checks
+  known broken for unrelated reasons. The run prints a `checks  skipped` row.
+
+```
+  pr      #1 https://github.com/OWNER/REPO/pull/1
+  checks  waiting on test
+[ERROR] PR #1 has failing checks: test
+  checks  failed; PR #1 is open; nothing is merged or tagged
+  hint    resume: git checkout dev && stanza release merge -y
+```
+
+With `--json`, the success document carries `"checks"`: `"passed"`, `"none"`,
+`"skipped"`, `"unavailable"` (`--no-pr` without a readable CI), or `null`
+(`--local`, or a resumed release).
+
 ## When a release stops partway
 
 A failed step prints the error that git or gh gave, then a row naming the step
-(`bump`, `push`, `pr`, `merge`, `tag`, or `cycle`), what it left behind, and the
+(`bump`, `push`, `pr`, `checks`, `merge`, `tag`, or `cycle`), what it left behind, and the
 command that resumes from there:
 
 ```
@@ -169,6 +206,7 @@ stanza release prerelease -y         # bump to the next alpha on the current bra
 - Use `-y` (`--yes`) for non-interactive runs.
 - Alpha versions live on `dev`; stable releases are tagged on `main` only.
 - A stable release blocks on an empty `## [Unreleased]`; fill it first (or pass `--no-changelog`).
+- The release merge waits for CI and stops on a failure; don't pre-poll the checks.
 - Add `--json` to any command for machine-readable output (`schema_version: 1`).
 - stanza writes its own `version [...]` commit subjects; `stanza rules` lists
   them, and `stanza rules install` makes that list an always-on Claude Code rule.
