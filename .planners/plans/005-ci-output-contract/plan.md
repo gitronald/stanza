@@ -1,10 +1,10 @@
 ---
 id: 5
 slug: ci-output-contract
-status: implemented
+status: done
 branch: feature/ci-output-contract
 created: 2026-10-09T18:49:08-07:00
-concluded:
+concluded: 2026-10-11T04:41:39-07:00
 pr: https://github.com/gitronald/stanza/pull/20
 ---
 
@@ -183,3 +183,25 @@ on whatever bash that machine has (5.x here). Two gaps follow.
      **Answered 2026-10-11: yes, in this PR.** Done; see the 04:46 Log entry.
 - **Not verified.** The badge renders only once `test.yml` runs on `main`,
   so it shows no status until the next release merges.
+
+## Retrospective
+
+- The first CI run paid for itself straight away. It caught two tests that
+  leaned on a global git identity, and a macOS-only path mismatch
+  (`/var` -> `/private/var`), none of which a local run could see. Isolating
+  git config in `tests/run.sh` means local runs now see the identity problem
+  too.
+- bash 3.2 held up: the whole suite passed on macOS `/bin/bash` on its first
+  run. The `bash` shim in `tests/run.sh` was enough to put stanza itself on
+  3.2, with no change to any test.
+- The matrix earned its keep only once it checked content as well as shape.
+  The first version checked exit codes and parseability, and the review
+  showed that it could not tell which step failed or whether the payload was
+  right. Mutation runs on a scratch copy were the quickest way to show that
+  each new assertion bites.
+- The plan's ShellCheck trial was two days stale and the count had moved
+  (31 findings, not 27). Re-measuring before acting was the right call.
+- Building the matrix found a gap in the contract: `init` and `rules` printed
+  nothing on failure under `--json`. Pinning today's behavior and holding the
+  question for the gate kept the run moving, and the answer turned into a
+  small, well-tested change.
