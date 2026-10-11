@@ -5,9 +5,11 @@
 #              run is held to the same rules:
 #                - exit 0 on success, non-zero on failure
 #                - --json: stdout is one JSON document on one line, naming the
-#                  command; everything else went to stderr. On success it
-#                  carries the -q value; a failed release names its step
-#                - -q text: stdout is the one documented value on success
+#                  command and whether it succeeded (ok); everything else
+#                  went to stderr. On success it carries the -q value; on
+#                  failure it carries the error, and a release names its step
+#                - -q text: stdout is the one documented value on success,
+#                  and empty on failure
 #                - text: stdout never carries a JSON document
 #              A new command is a row in COMMANDS, not a new block.
 set -e
@@ -89,6 +91,7 @@ fail_hook() {
 }
 fail_dirty() { echo changed >> notes; }
 fail_gh() { touch "$T/gh-fails"; }
+fail_usage() { EXTRA_ARGS="--no-such-option"; }
 fail_handwritten() {
     mkdir -p "$T/home/.claude/rules"
     echo "a rule someone wrote" > "$T/home/.claude/rules/stanza.md"
@@ -99,16 +102,15 @@ fail_handwritten() {
 #
 # The -q value is what -q prints in text mode and what the jq filter in JSON
 # field reads from the --json document; @T@ in it stands for the case's $T.
-# A failure is fail_<name>:<expect>, where expect is the failed_step of the
-# release's ok=false document, or "empty" for a command that prints nothing on
-# stdout when it fails.
+# A failure is fail_<name>:<step>, where step is the failed_step of the
+# release's ok=false document, or "-" for a command without steps.
 COMMANDS='
-release-full|setup_alpha|release patch --local -y|release|0.1.0|.to_version|hook:bump dirty:preflight
-release-pr|setup_alpha|release pr patch --local -y|release|0.1.0|.to_version|hook:bump dirty:preflight
-release-merge|setup_stable|release merge --local -y|release|0.1.0|.tag.name[1:]|hook:cycle dirty:preflight
-release-prerelease|setup_alpha|release prerelease --local -y|release|0.1.0a1|.to_version|hook:bump dirty:preflight
-init|setup_init|init -y|init|https://example.test/repo|.repo_url|gh:empty
-rules-install|setup_stable|rules install|rules|@T@/home/.claude/rules/stanza.md|.path|handwritten:empty
+release-full|setup_alpha|release patch --local -y|release|0.1.0|.to_version|hook:bump dirty:preflight usage:preflight
+release-pr|setup_alpha|release pr patch --local -y|release|0.1.0|.to_version|hook:bump dirty:preflight usage:preflight
+release-merge|setup_stable|release merge --local -y|release|0.1.0|.tag.name[1:]|hook:cycle dirty:preflight usage:preflight
+release-prerelease|setup_alpha|release prerelease --local -y|release|0.1.0a1|.to_version|hook:bump dirty:preflight usage:preflight
+init|setup_init|init -y|init|https://example.test/repo|.repo_url|gh:- usage:-
+rules-install|setup_stable|rules install|rules|@T@/home/.claude/rules/stanza.md|.path|handwritten:- usage:-
 '
 
 # --- One case ------------------------------------------------------------------
@@ -125,10 +127,11 @@ check_case() {
     [[ "$mode" == json ]] && flags+=(--json)
 
     "$setup"
+    EXTRA_ARGS=""
     [[ -n "$failure" ]] && "fail_$failure"
     local status=0
     # shellcheck disable=SC2086  # ARGS is a word list from the table
-    HOME="$T/home" PATH="$T/bin:$PATH" "$STANZA" ${flags[@]+"${flags[@]}"} $args \
+    HOME="$T/home" PATH="$T/bin:$PATH" "$STANZA" ${flags[@]+"${flags[@]}"} $args $EXTRA_ARGS \
         > "$T/stdout" 2> "$T/stderr" < /dev/null || status=$?
     local out want
     out=$(cat "$T/stdout")
@@ -142,37 +145,34 @@ $(sed 's/^/      /' "$T/stderr")"
     fi
 
     if [[ "$mode" == json ]]; then
-        if [[ "$expect" == empty ]]; then
-            [[ -z "$out" ]] && pass || fail "$label: expected empty stdout, got: $out"
+        local count lines
+        count=$(jq -s length < "$T/stdout" 2>/dev/null) || count="unparseable"
+        lines=$(wc -l < "$T/stdout" | tr -d ' ')
+        if [[ "$count" == 1 && "$lines" == 1 ]]; then
+            pass
         else
-            local count lines
-            count=$(jq -s length < "$T/stdout" 2>/dev/null) || count="unparseable"
-            lines=$(wc -l < "$T/stdout" | tr -d ' ')
-            if [[ "$count" == 1 && "$lines" == 1 ]]; then
-                pass
-            else
-                fail "$label: stdout is not one JSON line (documents: $count, lines: $lines): $out"
-                cleanup
-                return 0
-            fi
-            jq -e --arg c "$command" '.command == $c and .schema_version == 1' "$T/stdout" > /dev/null \
-                && pass || fail "$label: command is not \"$command\": $out"
-            if [[ -z "$failure" ]]; then
-                local got
-                got=$(jq -r "$field" "$T/stdout")
-                [[ "$got" == "$want" ]] && pass || fail "$label: $field is '$got', expected '$want'"
-                if [[ "$command" == release ]]; then
-                    jq -e '.ok == true' "$T/stdout" > /dev/null && pass || fail "$label: ok is not true: $out"
-                fi
-            else
-                jq -e --arg step "$expect" '.ok == false and .failed_step == $step' "$T/stdout" > /dev/null \
-                    && pass || fail "$label: expected ok=false at step $expect: $out"
-            fi
+            fail "$label: stdout is not one JSON line (documents: $count, lines: $lines): $out"
+            cleanup
+            return 0
+        fi
+        jq -e --arg c "$command" '.command == $c and .schema_version == 1' "$T/stdout" > /dev/null \
+            && pass || fail "$label: command is not \"$command\": $out"
+        if [[ -z "$failure" ]]; then
+            local got
+            got=$(jq -r "$field" "$T/stdout")
+            [[ "$got" == "$want" ]] && pass || fail "$label: $field is '$got', expected '$want'"
+            jq -e '.ok == true' "$T/stdout" > /dev/null && pass || fail "$label: ok is not true: $out"
+        else
+            jq -e --arg step "$expect" '.ok == false and (.error | type) == "string"
+                and (.failed_step // "-") == $step' "$T/stdout" > /dev/null \
+                && pass || fail "$label: expected ok=false with an error, step $expect: $out"
         fi
     else
         [[ "$out" != *'"schema_version"'* ]] && pass || fail "$label: JSON on stdout in text mode"
         if [[ "$verbosity" == -q && -z "$failure" ]]; then
             [[ "$out" == "$want" ]] && pass || fail "$label: stdout is '$out', expected '$want'"
+        elif [[ "$verbosity" == -q ]]; then
+            [[ -z "$out" ]] && pass || fail "$label: stdout is '$out', expected nothing"
         fi
     fi
     cleanup
@@ -192,6 +192,20 @@ while IFS='|' read -r id setup args command quiet_value field failures; do
         done
     done
 done <<< "$COMMANDS"
+
+# rules check prints its own document and exits 1 when the rule is not
+# current: the exit trap must not add a second document
+echo "rules-check"
+setup_stable
+mkdir -p "$T/home/.claude/rules"
+echo "an old rule" > "$T/home/.claude/rules/stanza.md"
+status=0
+HOME="$T/home" "$STANZA" --json rules check > "$T/stdout" 2> /dev/null || status=$?
+[[ $status -eq 1 ]] && pass || fail "rules-check drifted: exit $status, expected 1"
+[[ "$(jq -s length < "$T/stdout" 2>/dev/null)" == 1 ]] && pass || fail "rules-check drifted: not one document: $(cat "$T/stdout")"
+jq -e '.ok == false and .status == "drifted"' "$T/stdout" > /dev/null \
+    && pass || fail "rules-check drifted: expected ok=false and the status: $(cat "$T/stdout")"
+cleanup
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
