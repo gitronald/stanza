@@ -1,8 +1,8 @@
 ---
 id: 5
 slug: ci-output-contract
-status: draft
-branch:
+status: active
+branch: feature/ci-output-contract
 created: 2026-10-09T18:49:08-07:00
 concluded:
 pr:
@@ -79,3 +79,11 @@ on whatever bash that machine has (5.x here). Two gaps follow.
 ### Order
 
 2 -> 1 -> 3 -> 4. The runner first, since both the matrix and CI call it.
+
+## Log
+
+- **2026-10-11T02:00:46-07:00** — Activated.
+  - Branch: `feature/ci-output-contract`
+  - Base: `dev` at `decba7b`
+  - Worktree: `.worktrees/ci-output-contract`
+  - PR: pending
