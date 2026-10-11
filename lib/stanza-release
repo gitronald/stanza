@@ -62,8 +62,10 @@ release_failure_advice() {
     [[ "$YES_TO_ALL" == "true" ]] && yes=" -y"
     [[ "$LOCAL_ONLY" == "true" ]] && merge_flags=" --local"
     [[ "$NO_PR" == "true" ]] && merge_flags="$merge_flags --no-pr"
+    [[ "$NO_DEV_PRERELEASE" == "true" && "$PHASE" != "pr" ]] && merge_flags="$merge_flags --no-dev-cycle"
     local resume_merge="stanza release merge$merge_flags$yes"
-    local pr_create="gh pr create --base $base --head dev --title $tag --fill"
+    # The same command again resumes at the push and the PR (find_unfinished_bump).
+    local rerun="stanza release $CMD_LABEL$merge_flags$yes"
     local manual
     FAILED_STATE=""
     RESUME_CMD=""
@@ -73,26 +75,14 @@ release_failure_advice() {
             FAILED_STATE="the version bump did not complete; nothing was pushed"
             RESUME_NOTES="check git status and git log, undo the partial bump, then re-run: stanza release $CMD_LABEL$yes"
             ;;
-        push)
-            FAILED_STATE="$tag is committed on dev but not pushed"
-            if [[ "$PHASE" == "pr" ]]; then
-                RESUME_CMD="git push origin dev && $pr_create"
-                RESUME_NOTES="then review the PR and run: stanza release merge"
-            elif release_uses_pr; then
-                RESUME_CMD="git push origin dev && $pr_create && $resume_merge"
+        push|pr)
+            if [[ "$step" == "push" ]]; then
+                FAILED_STATE="$tag is committed on dev but not pushed"
             else
-                RESUME_CMD="git push origin dev && $resume_merge"
+                FAILED_STATE="$tag is pushed to dev; nothing is merged"
             fi
-            ;;
-        pr)
-            FAILED_STATE="$tag is pushed to dev; nothing is merged"
-            if [[ "$PHASE" == "pr" ]]; then
-                RESUME_CMD="$pr_create"
-                RESUME_NOTES="skip that if the PR is open; then review it and run: stanza release merge"
-            else
-                RESUME_CMD="$resume_merge"
-                RESUME_NOTES="if no PR is open, first: $pr_create"
-            fi
+            RESUME_CMD="$rerun"
+            [[ "$PHASE" == "pr" ]] && RESUME_NOTES="then review the PR and run: stanza release merge"
             ;;
         checks)
             if release_uses_pr; then
@@ -893,6 +883,10 @@ handle_prerelease_workflow() {
 # RELEASE_PUSHED at module scope for downstream JSON emission. release_preflight
 # has checked that it can run.
 create_version_bump_on_dev() {
+    if [[ "$BUMP_RESUMED" == "true" ]]; then
+        resume_version_bump_on_dev
+        return 0
+    fi
     RELEASE_FROM_VERSION="$CURRENT_VERSION"
     confirm_step "1: Create version bump [$BUMP_TYPE] commit on dev branch"
     step_start bump
@@ -909,6 +903,37 @@ create_version_bump_on_dev() {
         step_start push
         git_quiet push origin dev
         print_row push "origin/dev"
+        step_done
+        RELEASE_PUSHED=true
+    elif [[ "$LOCAL_ONLY" == "true" ]]; then
+        print_row push "skipped (--local)"
+    else
+        print_row push "skipped (no remote)"
+    fi
+}
+
+# Step 1, resumed: dev already carries the bump an earlier run committed
+# (find_unfinished_bump). Push it unless origin/dev has it. Sets the variables
+# create_version_bump_on_dev sets; RELEASE_FROM_VERSION is empty, since the run
+# did not see the version before the bump.
+resume_version_bump_on_dev() {
+    RELEASE_FROM_VERSION=""
+    RELEASE_TO_VERSION="$CURRENT_VERSION"
+    RELEASE_COMMIT_SHA=$(git rev-parse --short HEAD)
+    confirm_step "1: Resume the $BUMP_TYPE bump to $RELEASE_TO_VERSION already on dev"
+    step_start bump
+    print_row bump "$RELEASE_TO_VERSION on dev, committed earlier ($RELEASE_COMMIT_SHA); resuming"
+    step_done
+
+    RELEASE_PUSHED=false
+    if ! should_skip_remote; then
+        step_start push
+        if [[ "$(git rev-parse dev)" == "$(git rev-parse -q --verify refs/remotes/origin/dev)" ]]; then
+            print_row push "origin/dev (already pushed)"
+        else
+            git_quiet push origin dev
+            print_row push "origin/dev"
+        fi
         step_done
         RELEASE_PUSHED=true
     elif [[ "$LOCAL_ONLY" == "true" ]]; then
@@ -1186,10 +1211,18 @@ wait_for_release_ci() {
 }
 
 # Step 2a: Open a PR from dev into base (no merge — the create half of the
-# old gh_create_and_merge_pr). Sets RELEASE_PR_NUMBER, RELEASE_PR_URL.
+# old gh_create_and_merge_pr), or take the release PR an earlier run opened
+# (RESUME_PR_NUMBER). Sets RELEASE_PR_NUMBER, RELEASE_PR_URL.
 gh_create_pr() {
     local version_tag="$1"
     step_start pr
+    if [[ -n "$RESUME_PR_NUMBER" ]]; then
+        RELEASE_PR_NUMBER="$RESUME_PR_NUMBER"
+        RELEASE_PR_URL=$(gh pr view "$RELEASE_PR_NUMBER" --json url --jq '.url' 2>/dev/null || true)
+        print_row pr "#$RELEASE_PR_NUMBER $RELEASE_PR_URL (opened earlier)"
+        step_done
+        return 0
+    fi
     gh_quiet pr create --base "$BASE_BRANCH" --head dev --title "$version_tag" --fill --assignee @me
 
     # Get most recent open PR number
@@ -1617,16 +1650,17 @@ latest_version_tag() {
 }
 
 # Record a failure unless <branch> is level with origin/<branch>, after
-# fetching it.
+# fetching it. With ahead_ok true, a branch only ahead of origin's passes too.
+# Usage: preflight_branch_level <branch> [ahead_ok]
 preflight_branch_level() {
-    local branch="$1" out counts ahead behind hint
+    local branch="$1" ahead_ok="${2:-false}" out counts ahead behind hint
     if ! out=$(git_net fetch origin "$branch" 2>&1); then
         preflight_fail "Could not fetch from origin/$branch" "" "$out"
         return 0
     fi
     counts=$(git rev-list --left-right --count "$branch...origin/$branch" 2>/dev/null) || counts="0 0"
     read -r ahead behind <<< "$counts"
-    if [[ "$ahead" -eq 0 && "$behind" -eq 0 ]]; then
+    if [[ "$behind" -eq 0 && ( "$ahead" -eq 0 || "$ahead_ok" == "true" ) ]]; then
         return 0
     fi
     if [[ "$behind" -eq 0 ]]; then
@@ -1725,12 +1759,77 @@ preflight_merge_pr() {
     fi
 }
 
+# Find a stable bump that an earlier 'release <type>' or 'release pr <type>'
+# run committed on dev and did not release: dev's last commit is the bump to
+# the version dev is on, and that version is tagged neither in this clone nor
+# on origin. The run then resumes at the push and the PR instead of bumping
+# again. Sets BUMP_RESUMED_TYPE to the bump's type and returns 0 when found.
+# Part of release_preflight: an unreadable origin is recorded with
+# preflight_fail and returns 1.
+BUMP_RESUMED_TYPE=""
+find_unfinished_bump() {
+    local subject out re='^version \[(patch|minor|major)\]: (.+)$'
+    BUMP_RESUMED_TYPE=""
+    subject=$(git log -1 --format=%s 2>/dev/null) || return 1
+    [[ "$subject" =~ $re ]] || return 1
+    [[ "${BASH_REMATCH[2]}" == "$CURRENT_VERSION" ]] || return 1
+    BUMP_RESUMED_TYPE="${BASH_REMATCH[1]}"
+    if git rev-parse -q --verify "refs/tags/v$CURRENT_VERSION" >/dev/null; then
+        BUMP_RESUMED_TYPE=""
+        return 1
+    fi
+    if ! should_skip_remote; then
+        if ! out=$(git_net ls-remote --tags origin "refs/tags/v$CURRENT_VERSION" 2>&1); then
+            BUMP_RESUMED_TYPE=""
+            preflight_fail "could not read tag v$CURRENT_VERSION from origin" "" "$out"
+            return 1
+        fi
+        if [[ -n "$out" ]]; then
+            BUMP_RESUMED_TYPE=""
+            return 1
+        fi
+    fi
+}
+
+# For a run that resumes an unfinished bump through a PR: record a failure when
+# dev's head is already merged into origin's base branch, which the merge phase
+# finishes, and take the release PR an earlier run opened into
+# RESUME_PR_NUMBER, after checking that its title is the tag.
+# Usage: preflight_resumed_bump <tag> <gh_ok>
+RESUME_PR_NUMBER=""
+preflight_resumed_bump() {
+    local tag="$1" gh_ok="$2" out pr title
+    release_uses_pr || return 0
+    if ! out=$(git_net fetch origin "$BASE_BRANCH" 2>&1); then
+        preflight_fail "Could not fetch from origin/$BASE_BRANCH" "" "$out"
+        return 0
+    fi
+    if git merge-base --is-ancestor dev "origin/$BASE_BRANCH"; then
+        preflight_fail "$tag is already merged into $BASE_BRANCH, untagged" \
+            "finish it: stanza release merge"
+        return 0
+    fi
+    [[ "$gh_ok" == "true" ]] || return 0
+    pr=$(gh_get_last_open_pr_number 2>/dev/null) || pr=""
+    [[ -n "$pr" ]] || return 0
+    title=$(gh pr view "$pr" --json title --jq '.title' 2>/dev/null) || title=""
+    if [[ "$title" != "$tag" ]]; then
+        preflight_fail "PR #$pr is open from dev to $BASE_BRANCH with the title '$title', not $tag" \
+            "close it, or retitle it $tag, then re-run"
+        return 0
+    fi
+    RESUME_PR_NUMBER="$pr"
+}
+
 # Run every check the phase needs and report the failures together (exit 1),
 # or return when the release can go ahead. Sets RELEASE_TARGET, the version
-# the run ships; for merge, RELEASE_RESUMED and SHIPPED_TAG when an earlier run
-# merged and tagged the release (find_shipped_release), and MERGE_PR_NUMBER.
+# the run ships; for full and pr, BUMP_RESUMED when dev carries an unfinished
+# bump (find_unfinished_bump); for merge, RELEASE_RESUMED and SHIPPED_TAG when
+# an earlier run merged the release (find_shipped_release,
+# find_merged_release), and MERGE_PR_NUMBER.
 RELEASE_TARGET=""
 RELEASE_RESUMED=false
+BUMP_RESUMED=false
 release_preflight() {
     local on_branch=true gh_ok=true tag="" tags latest where errors_before
 
@@ -1769,6 +1868,16 @@ release_preflight() {
                 "versions are major.minor.patch with an optional aN suffix, without leading zeros"
         elif [[ "$PHASE" == "merge" ]]; then
             RELEASE_TARGET="$CURRENT_VERSION"
+        elif [[ "$BUMP_TYPE" != "prerelease" ]] && find_unfinished_bump; then
+            RELEASE_TARGET="$CURRENT_VERSION"
+            BUMP_RESUMED=true
+            if [[ "$BUMP_RESUMED_TYPE" != "$BUMP_TYPE" ]]; then
+                local resume_label="$BUMP_RESUMED_TYPE"
+                [[ "$PHASE" == "pr" ]] && resume_label="pr $resume_label"
+                [[ "$YES_TO_ALL" == "true" ]] && resume_label="$resume_label -y"
+                preflight_fail "dev already carries an unreleased $BUMP_RESUMED_TYPE bump to $CURRENT_VERSION; not bumping again" \
+                    "resume it: stanza release $resume_label"$'\n'"or, to release another version, remove that bump commit from dev first"
+            fi
         elif [[ "$PROJECT_TYPE_DETECTED" == "latex" ]]; then
             RELEASE_TARGET=$(bump_latex_version_string "$CURRENT_VERSION" "$BUMP_TYPE")
         else
@@ -1804,12 +1913,15 @@ release_preflight() {
                 preflight_branch_level "$CURRENT_BRANCH"
             fi
         elif [[ "$PHASE" != "merge" ]] || ! release_uses_pr; then
-            preflight_branch_level dev
+            # A resumed bump may not be pushed yet.
+            preflight_branch_level dev "$BUMP_RESUMED"
         fi
     fi
 
-    # full and pr: what the stable bump needs
-    if [[ "$BUMP_TYPE" != "prerelease" && "$PHASE" != "merge" ]]; then
+    # full and pr: what the stable bump needs, or what resuming one needs
+    if [[ "$BUMP_RESUMED" == "true" ]]; then
+        preflight_resumed_bump "$tag" "$gh_ok"
+    elif [[ "$BUMP_TYPE" != "prerelease" && "$PHASE" != "merge" ]]; then
         if [[ "$on_branch" == "true" && "$NO_CHANGELOG" != "true" &&
             "$(changelog_unreleased_status)" == "empty" ]]; then
             preflight_fail "CHANGELOG.md [Unreleased] is empty; add entries before releasing" \
@@ -1875,6 +1987,14 @@ report_check_passed() {
     elif [[ "$PHASE" == "merge" ]]; then
         summary="would merge and tag v$RELEASE_TARGET"
         [[ -n "$MERGE_PR_NUMBER" ]] && summary="$summary from PR #$MERGE_PR_NUMBER"
+    elif [[ "$BUMP_RESUMED" == "true" ]]; then
+        summary="would resume the $BUMP_TYPE bump to $RELEASE_TARGET already on dev"
+        if [[ -n "$RESUME_PR_NUMBER" ]]; then
+            summary="$summary, with PR #$RESUME_PR_NUMBER"
+        elif [[ "$PHASE" == "pr" ]] && ! should_skip_remote; then
+            summary="$summary and open its PR"
+        fi
+        [[ "$PHASE" == "full" ]] && summary="$summary, and release v$RELEASE_TARGET"
     elif [[ "$PHASE" == "pr" ]]; then
         summary="would bump $CURRENT_VERSION -> $RELEASE_TARGET and open its PR"
     else
@@ -1903,6 +2023,8 @@ report_check_passed() {
     if [[ "$PHASE" == "merge" ]]; then
         json_set_raw resumed "$RELEASE_RESUMED"
         json_set_raw pr "${MERGE_PR_NUMBER:-null}"
+    elif [[ "$BUMP_TYPE" != "prerelease" ]]; then
+        json_set_raw resumed "$BUMP_RESUMED"
     fi
     json_emit
     print_done "preflight passed; nothing changed"
@@ -1949,9 +2071,10 @@ case "$PHASE" in
         # JSON output (stdout, suppresses human banner via JSON_OUTPUT gating)
         json_set command "release"
         json_set_raw ok true
+        json_set_raw resumed "$BUMP_RESUMED"
         json_set bump_type "$BUMP_TYPE"
         json_set project_type "$PROJECT_TYPE_DETECTED"
-        json_set from_version "$RELEASE_FROM_VERSION"
+        json_set_or_null from_version "$RELEASE_FROM_VERSION"
         json_set to_version "$RELEASE_TO_VERSION"
         json_set branch_from "dev"
         json_set branch_to "$BASE_BRANCH"
@@ -1990,9 +2113,10 @@ case "$PHASE" in
         json_set command "release"
         json_set phase "pr"
         json_set_raw ok true
+        json_set_raw resumed "$BUMP_RESUMED"
         json_set bump_type "$BUMP_TYPE"
         json_set project_type "$PROJECT_TYPE_DETECTED"
-        json_set from_version "$RELEASE_FROM_VERSION"
+        json_set_or_null from_version "$RELEASE_FROM_VERSION"
         json_set to_version "$RELEASE_TO_VERSION"
         json_set branch_from "dev"
         json_set branch_to "$BASE_BRANCH"

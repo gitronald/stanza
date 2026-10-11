@@ -1327,6 +1327,134 @@ test_merged_release_refusals() {
     teardown_remote_repo
 }
 
+# The number of patch bump commits on dev.
+patch_bumps() {
+    git log --format=%s dev | grep -c '^version \[patch\]' || true
+}
+
+test_unfinished_bump_resumes_pr() {
+    echo ""
+    echo "A refused push in 'release pr': the same command pushes and opens the PR"
+    setup_remote_repo
+    arm_step_failure push >/dev/null
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr patch -y 2>&1) || code=$?
+    assert_eq "pr exits 1" "1" "$code"
+    assert_contains "says the bump is not pushed" "$out" "push    failed; v0.1.0 is committed on dev but not pushed"
+    assert_contains "resume is the same command" "$out" "resume: stanza release pr patch -y"
+    assert_contains "then the merge" "$out" "then review the PR and run: stanza release merge"
+
+    rm "$TEST_TMPDIR/remote.git/hooks/update"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr patch -y --check 2>&1) || code=$?
+    assert_eq "check exits 0" "0" "$code"
+    assert_contains "check reports the resume" "$out" \
+        "would resume the patch bump to 0.1.0 already on dev and open its PR"
+
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr patch -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume keeps the bump" "$out" "0.1.0 on dev, committed earlier"
+    assert_contains "resume pushes dev" "$out" "push    origin/dev"
+    assert_contains "resume opens the PR" "$out" "#1 https://example.test/pull/1"
+    assert_eq "not bumped again" "0.1.0" "$(cat VERSION)"
+    assert_eq "one patch bump" "1" "$(patch_bumps)"
+    assert_eq "dev pushed" "$(git rev-parse dev)" "$(remote_sha dev)"
+    assert_eq "PR open" "open" "$(cat "$GH_MOCK_STATE/state")"
+
+    # Everything is done: a further run changes nothing.
+    local json
+    code=0
+    json=$(NO_COLOR=1 "$STANZA" --json release pr patch -y 2>/dev/null) || code=$?
+    assert_eq "second resume exits 0" "0" "$code"
+    assert_contains "second resume is marked resumed" "$json" '"resumed":true'
+    assert_contains "second resume has no from_version" "$json" '"from_version":null'
+    assert_eq "second resume: one patch bump" "1" "$(patch_bumps)"
+
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "merge exits 0" "0" "$code"
+    assert_eq "released" "v0.1.0" "$(git tag -l v0.1.0)"
+    teardown_remote_repo
+}
+
+test_unfinished_bump_resumes_full() {
+    echo ""
+    echo "A failed PR step in a full release: the same command finishes it"
+    setup_remote_repo
+    cat > CHANGELOG.md << 'EOF'
+# Changelog
+
+## [Unreleased]
+
+### Added
+- A new thing
+EOF
+    git add CHANGELOG.md
+    git commit -q -m "add changelog"
+    git push -q origin dev
+    arm_step_failure pr >/dev/null
+
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "release exits 1" "1" "$code"
+    assert_contains "says nothing is merged" "$out" "pr      failed; v0.1.0 is pushed to dev; nothing is merged"
+    assert_contains "resume is the same command" "$out" "resume: stanza release patch -y"
+
+    # [Unreleased] is promoted and empty now; the resume does not refuse it.
+    rm "$GH_MOCK_STATE/create_fail"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume finds dev pushed" "$out" "origin/dev (already pushed)"
+    assert_contains "resume merges" "$out" "#1 merged into main"
+    assert_eq "tagged" "v0.1.0" "$(git tag -l v0.1.0)"
+    assert_eq "tag on origin" "$(git rev-parse v0.1.0)" "$(remote_sha v0.1.0)"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    assert_eq "one patch bump" "1" "$(patch_bumps)"
+    teardown_remote_repo
+}
+
+test_unfinished_bump_refusals() {
+    echo ""
+    echo "An unfinished bump is not bumped again or resumed as something else"
+    setup_remote_repo
+    arm_step_failure push >/dev/null
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1 || true
+    rm "$TEST_TMPDIR/remote.git/hooks/update"
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr minor -y 2>&1) || code=$?
+    assert_eq "other type: exits 1" "1" "$code"
+    assert_contains "other type: says so" "$out" \
+        "dev already carries an unreleased patch bump to 0.1.0; not bumping again"
+    assert_contains "other type: names the resume" "$out" "resume it: stanza release pr patch -y"
+    assert_eq "other type: not bumped" "0.1.0" "$(cat VERSION)"
+    teardown_remote_repo
+
+    # Merged on origin, untagged: that is the merge phase's to finish.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release pr patch -y >/dev/null 2>&1
+    gh pr merge 1 --merge --subject "version [release]: v0.1.0 - PR #1" >/dev/null 2>&1
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "merged: exits 1" "1" "$code"
+    assert_contains "merged: says so" "$out" "v0.1.0 is already merged into main, untagged"
+    assert_contains "merged: hints the merge phase" "$out" "finish it: stanza release merge"
+    assert_eq "merged: not bumped" "0.1.0" "$(cat VERSION)"
+    teardown_remote_repo
+
+    # Released with --no-dev-cycle: the tag exists, so this is a new release.
+    setup_remote_repo
+    NO_COLOR=1 "$STANZA" release patch -y --no-dev-cycle >/dev/null 2>&1
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr patch -y 2>&1) || code=$?
+    assert_eq "tagged: exits 0" "0" "$code"
+    assert_contains "tagged: bumps to the next version" "$out" "0.1.0 -> 0.1.1  on dev"
+    teardown_remote_repo
+}
+
 # --- Run -------------------------------------------------------------------
 
 test_merge_requires_dev() {
@@ -2090,6 +2218,9 @@ test_local_cycle_resume
 test_local_release_finished_remotely
 test_merged_release_resumes_tag
 test_merged_release_refusals
+test_unfinished_bump_resumes_pr
+test_unfinished_bump_resumes_full
+test_unfinished_bump_refusals
 test_checks_pass_then_merge
 test_checks_fail_stops_merge
 test_checks_none_reported
