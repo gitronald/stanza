@@ -74,6 +74,8 @@ for f in "${files[@]}"; do
         broken="$broken $name"
         printf 'FAIL  %-40s %s (exit %d, %ds)\n' "$name" "${results:-no Results line}" "$status" $((SECONDS - start))
         [[ "$VERBOSE" == true ]] || sed 's/^/    /' "$LOG"
+    elif [[ $p -eq 0 && $x -eq 0 ]]; then
+        printf 'skip  %-40s %s (%ds)\n' "$name" "$(grep -m1 'SKIP' "$LOG" | sed 's/^ *SKIP: //')" $((SECONDS - start))
     else
         printf 'ok    %-40s %s (%ds)\n' "$name" "$results" $((SECONDS - start))
     fi
