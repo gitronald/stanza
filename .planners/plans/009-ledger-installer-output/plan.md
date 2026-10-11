@@ -1,0 +1,275 @@
+---
+id: 9
+slug: ledger-installer-output
+status: done
+branch: feature/ledger-installer-output
+created: 2026-10-10T13:53:07-07:00
+concluded: 2026-10-10T14:29:45-07:00
+pr: https://github.com/gitronald/stanza/pull/12
+---
+
+# Restyle installer output in the ledger row grammar
+
+## Plan
+
+### Motivation
+
+`install.sh` and `uninstall.sh` print in a Homebrew-like `==>` style that no
+other stanza command uses, and they have problems that show up on macOS:
+
+- Color is never gated. Piped to a file or a CI log, every line carries raw
+  escape codes. `lib/stanza-common` already gates on `NO_COLOR`, `--no-color`,
+  and `[ -t fd ]`; the installers do not.
+- The PATH warning, the one line a Mac user must act on (`~/.local/bin` is not
+  on PATH by default), is bold yellow. With Terminal's "Use bright colors for
+  bold text" on, that is bright yellow on the Basic profile's white: 1.3:1.
+- The PATH hint names `~/.bashrc, ~/.zshrc, etc.` instead of the user's shell.
+  macOS defaults to zsh, and login bash on macOS reads `~/.bash_profile`.
+- The `━` rules print whatever the locale.
+- A successful install prints 49 lines; each step has a start and a done line.
+  A checksum mismatch does not say that nothing was installed or what to do.
+- `uninstall.sh` uses `echo -e`, which differs between shells.
+
+### Decision
+
+Adopt direction B, "Ledger", from the mockups in
+[artifacts/installer-styles.html](artifacts/installer-styles.html) (open it in
+a browser; the bar at the top switches the Terminal profile, piped/NO_COLOR,
+and a non-UTF-8 locale). The installer uses the same row grammar as
+`stanza release`: a bold `stanza install  (v1.2.1, ~/.local)` header, then
+two-space-indented rows with an 8-column dim label (`LABEL_WIDTH`) and the
+content beside it. Color sits on the label only (`warn` yellow, `hint` cyan,
+`error` red, `done` green), so the word carries the meaning and a weak hue on
+one profile costs nothing.
+
+Target output for a fresh install on macOS:
+
+```
+stanza install  (v1.2.1, ~/.local)
+  source  github.com/gitronald/stanza, release v1.2.1
+  bin     ~/.local/bin/stanza
+  lib     ~/.local/lib/stanza
+  bash    ~/.local/share/bash-completion/completions/stanza
+  zsh     ~/.local/share/zsh/site-functions/_stanza
+  rule    ~/.claude/rules/stanza.md
+
+  Install stanza 1.2.1? [Y/n] y
+
+  fetch   stanza-1.2.1.tar.gz
+  verify  sha256 3f9a0c51d2e7b8a4
+  files   ~/.local/bin/stanza, ~/.local/lib/stanza
+  bash    ~/.local/share/bash-completion/completions/stanza
+  zsh     ~/.local/share/zsh/site-functions/_stanza
+  rule    ~/.claude/rules/stanza.md
+  warn    ~/.local/bin is not on your PATH
+  hint    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  done    stanza 1.2.1. Open a new terminal, then run: stanza --help
+```
+
+And for a checksum mismatch (stderr):
+
+```
+  fetch   stanza-1.2.1.tar.gz
+  error   sha256 mismatch for stanza-1.2.1.tar.gz; nothing was installed
+          expected 3f9a...
+          actual   b7d2...
+  hint    retry; if it fails again: github.com/gitronald/stanza/issues
+```
+
+### macOS-safe constraints
+
+- bash 3.2: no `declare -A`, `${x,,}`, `mapfile`, `&>>`, `|&`, `${a[-1]}`,
+  `printf '%(...)T'`; no `"${arr[@]}"` on an empty array under `set -u`.
+- 16 basic ANSI colors (SGR 30-37), bold and dim only. No 256-color or
+  24-bit codes, no `tput` dependency, no cursor movement, spinners, `\r`
+  redraws, or `tput cols`.
+- `printf`, never `echo -e`/`echo -n`.
+- Color gate per fd: off under `NO_COLOR`, `--no-color`, `TERM=dumb`, or a
+  non-TTY fd; on under `CLICOLOR_FORCE` (non-zero). stdout rows check `-t 1`,
+  `error`/`hint`/`warn` rows go to stderr and check `-t 2`. `curl | bash` pipes
+  stdin only, so `-t 1` still sees the terminal.
+- No non-ASCII glyphs in the output (drop the `━` rules), so no locale check
+  is needed.
+- Paths under `$HOME` print as `~` via a `case "$1" in "$HOME"/*)` helper,
+  not `${1/#$HOME/~}`, whose tilde handling varies by bash version.
+- Lines stay under about 76 columns where content allows.
+
+### Approach
+
+1. **Helper.** `install.sh` cannot source `lib/stanza-common` in fetch mode
+   (it runs before the download), so it carries its own small copy: a color
+   gate and `row label content [fd] [sgr]`, plus `header` and `tilde`. Keep
+   the label width and colors identical to `print_row`, `print_hint`, and
+   `print_done`, and note in both files that they must stay in step. Step 7
+   adds a test that enforces it.
+   `uninstall.sh` runs from an installed or checked-out tree, so check whether
+   it can source `lib/stanza-common` instead of copying.
+2. **install.sh.** Replace `info`/`success`/`warn`/`error` call sites with
+   rows: one row per step, no start/done pairs. Collapse the configuration
+   block into `source`/`bin`/`lib`/`bash`/`zsh`/`rule`. Every installed file
+   is spelled out by its full path, both in the pre-prompt block and in the
+   step rows, never summarized as "completions" or "Claude Code rule". The
+   pre-prompt block resolves the same destination the install step will use:
+   the `$PREFIX/share/...` completion directories when writable, otherwise
+   `~/.bash_completion.d/stanza` and `~/.zsh/completions/_stanza`. A row is
+   omitted when its file will not be installed (`--no-completions`,
+   `--no-rules`, `~/.claude` missing, a system install), and the `rule` row
+   is followed by a `hint` naming `stanza rules install` when skipped for a
+   reason the user can change. Rewrite the end: drop the banner,
+   "Installation details", and "Next steps" in favor of the `warn`/`hint`
+   PATH rows (only when needed) and one `done` row.
+3. **Shell-aware PATH hint.** Pick the startup file from `${SHELL##*/}` and
+   `uname -s`: zsh -> `~/.zshrc`; bash -> `~/.bash_profile` on Darwin,
+   `~/.bashrc` elsewhere; fish -> `fish_add_path ~/.local/bin`; anything else
+   falls back to naming the export line. Same treatment for the completion
+   hints when the fallback paths are used: a `hint` row after the `zsh` row
+   gives `fpath=(~/.zsh/completions $fpath)` for `~/.zshrc`, and one after the
+   `bash` row gives the `~/.bash_completion.d` source loop for the bash
+   startup file.
+4. **Errors.** Every `error` row says whether anything was installed and is
+   followed by a `hint` row with the next step, matching `print_hint`.
+5. **`--no-color`.** Add the flag to `install.sh` and `uninstall.sh` for
+   parity with the CLI.
+6. **uninstall.sh.** Same grammar: `stanza uninstall  (~/.local)` header,
+   rows for each removed path, a `done` row.
+7. **Tests.** Update `tests/test-install.sh` assertions that match old
+   strings (`Source:`, `Downloading stanza v...`, `Checksum mismatch for`,
+   `Verified`, `Could not download ...`). Add cases: piped output contains no
+   ESC byte; `NO_COLOR=1` under a pseudo-TTY contains none either (if a PTY is
+   available in the test harness; otherwise test the gate function directly);
+   the PATH hint names `~/.zshrc` for `SHELL=/bin/zsh` and `~/.bash_profile`
+   for bash on Darwin (stub `uname`). Add a drift test that sources
+   `lib/stanza-common` and the installer's helper (or extracts it) and
+   asserts the same label width and the same SGR codes for the dim label,
+   `warn`, `hint`, `error`, and `done`, so the two copies cannot diverge
+   unnoticed.
+8. **Docs.** Add a CHANGELOG `[Unreleased]` entry. The README, CHANGELOG,
+   and `lib/stanza-guide.md` show no installer output today, so there are no
+   examples to update.
+
+### Verification
+
+- `tests/test-install.sh` and the rest of `tests/` pass.
+- Run the installer from a checkout and in fetch mode (local repo URL) and
+  compare against the mockup, in a TTY and piped through `cat -v`.
+- On macOS, run under `/bin/bash` 3.2 in Terminal's Basic and Pro profiles.
+  This needs a Mac and is carried by plan 010, which reviews this plan's
+  outcome on a Mac after it merges.
+
+### Accepted trade-offs
+
+- **Yellow `warn` label on Terminal's Basic profile (2.4:1 on white).** Kept
+  yellow for consistency with `print_warning` and the CLI's other output.
+  The label word carries the meaning and the content beside it is the
+  default foreground, so the low-contrast hue is a second cue, not the only
+  one. The label is never bold, which would turn it bright yellow (1.3:1)
+  when Terminal brightens bold text. Revisit in plan 010 if it reads poorly
+  on a real Mac.
+
+### Out of scope
+
+- Changing what the installer does (sources, checksums, prompts, flags other
+  than `--no-color`).
+- Restyling `stanza release`/`init`/`rules` output; the installer conforms to
+  it, not the reverse.
+- Directions A (Homebrew, tidied) and C (checklist) from the mockups, kept in
+  the artifact for reference.
+
+## Log
+
+- **2026-10-10T14:04:05-07:00** — Activated.
+  - Branch: `feature/ledger-installer-output`
+  - Base: `dev` at `3ef5fc1`
+  - Worktree: `.worktrees/ledger-installer-output`
+  - PR: pending
+- **2026-10-10T14:13:57-07:00** — Implemented steps 1-8.
+  - `install.sh` and `uninstall.sh` carry one identical helper block
+    (`use_color`, `header`, `row`, `warn`/`hint`/`error`/`more`/`done_row`,
+    `tilde`) between `# --- Output helpers` markers.
+    `tests/test-install.sh` asserts the two blocks are byte-identical and
+    compares the label width and SGR codes with `lib/stanza-common`. A
+    mutated SGR code in a scratch copy failed the check, as it should.
+  - Step 1: `uninstall.sh` cannot source `lib/stanza-common`. The README
+    tells users without a clone to download it alone, so `lib/` may not sit
+    beside it. It carries the same copy.
+  - Drift test, `warn`: `stanza-common`'s `YELLOW` is `1;33` (bold), which
+    this plan rules out for the label. The test checks that `warn` keeps
+    YELLOW's hue (`33`) and is not bold, not that the codes are equal.
+  - Pre-prompt block and step rows read the same destinations from
+    `plan_install`, so the completion rows name the fallback paths when
+    `$PREFIX/share` cannot be written (the case on a fresh `HOME`).
+  - Removed the "Finding the latest release" line. The lookup runs before
+    the header, which names the version it found. `create_directories` was
+    folded into `install_files`, so source checks run before anything is
+    created.
+  - Not in the plan: `--no-color` is also pre-scanned in `main`, so an
+    argument error printed before it is parsed also prints without color.
+  - Found, out of scope: `print_row`, `print_done`, and `print_header` in
+    `lib/stanza-common` decide color inside `$(...)`, where fd 1 is the
+    capture pipe, so `stanza release` never colors its stdout rows. The
+    installer's copy decides outside the substitution.
+  - Checks: `tests/test-install.sh` 110 passed, 0 failed (the PTY cases ran
+    under util-linux `script`). The rest of `tests/` passed. shellcheck is
+    not installed here, so it did not run. Not run under bash 3.2. That and
+    the Terminal profiles are plan 010's, on a Mac.
+- **2026-10-10T14:14:16-07:00** — PR opened: https://github.com/gitronald/stanza/pull/12
+- **2026-10-10T14:14:18-07:00** — Implemented: 6 commits ahead of `dev`.
+- **2026-10-10T14:18:10-07:00** — Reactivated: back to active after review.
+- **2026-10-10T14:20:04-07:00** — Fixed the color bug found above, on request, in this PR.
+  - `lib/stanza-common`: `print_header`, `print_row`, and `print_done`
+    now ask `should_use_color` in the calling shell, through a shared
+    `_print_label_row`. `print_hint` uses the same shape. It already worked,
+    because fd 2 is not captured. `_c` had no other caller and is removed.
+  - `tests/test-output-modes.sh`: one case stubs the gate to answer yes only
+    outside a subshell, so it runs on any platform. The other runs
+    `stanza release prerelease` under util-linux `script` and checks the
+    bold, dim, and green codes, and that `NO_COLOR` still suppresses them.
+    Against the old `stanza-common` (a scratch copy), all four color checks
+    failed. Against the fix, they pass.
+  - Left alone: `print_branch_version` in `lib/stanza-release` prints
+    ungated purple, but nothing calls it except a test that extracts it.
+  - Checks: all of `tests/` passed (output-modes 50/50, install 110/110).
+- **2026-10-10T14:20:09-07:00** — Implemented: 11 commits ahead of `dev`.
+- **2026-10-10T14:22:14-07:00** — Reactivated: back to active after review.
+- **2026-10-10T14:22:15-07:00** — Removed `print_branch_version` from `lib/stanza-release`, on
+  request. Its only reference was its extraction in
+  `tests/test-release-workflow.sh`'s setup, and nothing it was loaded for
+  called it. `PURPLE` in `lib/stanza-common` had no other user and went
+  with it. All of `tests/` passed afterwards.
+- **2026-10-10T14:22:18-07:00** — Implemented: 15 commits ahead of `dev`.
+- **2026-10-10T14:29:49-07:00** — Closed after the review gate.
+  - Review follow-up (`/code-review` at medium on PR #12; two finders, two
+    verifiers). No correctness defects. Four cleanup findings survived:
+    - Actioned: `install_completions` compared the destination with the
+      fallback paths spelled out again as literals. They are now
+      `BASH_COMPLETION_FALLBACK` and `ZSH_COMPLETION_FALLBACK`, set once and
+      used by both `plan_install` and the hint check. The existing fallback
+      and non-fallback hint tests cover it.
+    - Actioned: the `if has_esc ...; then r=yes; else r=no; fi` pair, nine
+      copies in `tests/test-install.sh`, is now one `esc_state` helper.
+    - No-op: the closing row reads `stanza. Run: ...` when `VERSION` is
+      missing. That takes a broken checkout, since `VERSION` is tracked.
+    - No-op: `print_hint` in `lib/stanza-common` still writes its own label
+      printf rather than going through `_print_label_row`. The duplication
+      predates this PR, and routing it would need an fd argument.
+  - Checks: all of `tests/` except `test-network.sh` passed (install
+    110/110). The review was not posted to the PR.
+
+## Retrospective
+
+- The plan held: the ledger grammar, the color gate, and the shell-aware
+  hints went in as specified. The largest change outside the plan was
+  `install_files` absorbing `create_directories`, so the source checks run
+  before anything is created.
+- Copying the helpers into both installers was safe because a drift test
+  compares them with `lib/stanza-common`. Its first run showed that the
+  "same codes" premise was wrong for `warn`, since `YELLOW` is bold.
+- Writing the installer's copy led to a real bug in the original:
+  `stanza-common` decided color inside `$(...)`, so `stanza release` never
+  colored its stdout rows. Writing a second implementation is a cheap way to
+  audit the first.
+- The PR went back to active twice for scope added on request (the color
+  fix, then removing dead code). Each pass was small, but the Log shows how
+  quickly "found, out of scope" became "fixed in this PR".
+- bash 3.2 and Terminal's profiles are still unverified. Plan 010 carries
+  them to a Mac.

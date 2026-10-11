@@ -110,7 +110,6 @@ source_release() {
     eval "$(extract_function gh_get_last_open_pr_number "$STANZA_DIR/lib/stanza-release")"
     eval "$(extract_function git_merge_dev_into_main "$STANZA_DIR/lib/stanza-release")"
     eval "$(extract_function create_new_prerelease_cycle "$STANZA_DIR/lib/stanza-release")"
-    eval "$(extract_function print_branch_version "$STANZA_DIR/lib/stanza-release")"
     eval "$(extract_function step_start "$STANZA_DIR/lib/stanza-release")"
     eval "$(extract_function step_done "$STANZA_DIR/lib/stanza-release")"
     BASE_BRANCH="main"

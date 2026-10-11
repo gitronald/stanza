@@ -1,0 +1,200 @@
+# macOS installer runs, 2026-10-10 (macOS 26.6.2, bash 3.2.57, Terminal 2.15, arm64)
+# Captures through cat -v. The tty-* blocks ran under a pty from BSD script with the
+# CR of each CRLF and the echoed EOF removed; the piped-* blocks are file redirections.
+# HOME starts empty except where the case seeds it (share-and-claude) or needs a prior
+# install (uninstall).
+
+##### tty-zsh-clean #####
+^[[1mstanza install^[[0m  (v1.2.1, ~/.local)
+  ^[[2msource  ^[[0mgithub.com/gitronald/stanza, release v1.2.1
+  ^[[2mbin     ^[[0m~/.local/bin/stanza
+  ^[[2mlib     ^[[0m~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.bash_completion.d/stanza
+  ^[[2mzsh     ^[[0m~/.zsh/completions/_stanza
+
+  ^[[2mfetch   ^[[0mstanza-1.2.1.tar.gz
+  ^[[2mverify  ^[[0msha256 c1bd4acb2dae7efe
+  ^[[2mfiles   ^[[0m~/.local/bin/stanza, ~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.bash_completion.d/stanza
+  ^[[0;36mhint    ^[[0madd to ~/.bash_profile: for f in ~/.bash_completion.d/*; do . "$f"; done
+  ^[[2mzsh     ^[[0m~/.zsh/completions/_stanza
+  ^[[0;36mhint    ^[[0madd to ~/.zshrc: fpath=(~/.zsh/completions $fpath)
+          and, if it has no compinit: autoload -Uz compinit && compinit
+  ^[[0;36mhint    ^[[0mno ~/.claude, so no rule; to add it later: stanza rules install
+  ^[[0;33mwarn    ^[[0m~/.local/bin is not on your PATH
+  ^[[0;36mhint    ^[[0mecho 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  ^[[0;32mdone    ^[[0mstanza 1.2.1. Open a new terminal, then run: stanza --help
+
+##### tty-bash-shell #####
+^[[1mstanza install^[[0m  (v1.2.1, ~/.local)
+  ^[[2msource  ^[[0mgithub.com/gitronald/stanza, release v1.2.1
+  ^[[2mbin     ^[[0m~/.local/bin/stanza
+  ^[[2mlib     ^[[0m~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.bash_completion.d/stanza
+  ^[[2mzsh     ^[[0m~/.zsh/completions/_stanza
+
+  ^[[2mfetch   ^[[0mstanza-1.2.1.tar.gz
+  ^[[2mverify  ^[[0msha256 c1bd4acb2dae7efe
+  ^[[2mfiles   ^[[0m~/.local/bin/stanza, ~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.bash_completion.d/stanza
+  ^[[0;36mhint    ^[[0madd to ~/.bash_profile: for f in ~/.bash_completion.d/*; do . "$f"; done
+  ^[[2mzsh     ^[[0m~/.zsh/completions/_stanza
+  ^[[0;36mhint    ^[[0madd to ~/.zshrc: fpath=(~/.zsh/completions $fpath)
+          and, if it has no compinit: autoload -Uz compinit && compinit
+  ^[[0;36mhint    ^[[0mno ~/.claude, so no rule; to add it later: stanza rules install
+  ^[[0;33mwarn    ^[[0m~/.local/bin is not on your PATH
+  ^[[0;36mhint    ^[[0mecho 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bash_profile
+  ^[[0;32mdone    ^[[0mstanza 1.2.1. Open a new terminal, then run: stanza --help
+
+##### tty-share-and-claude #####
+^[[1mstanza install^[[0m  (v1.2.1, ~/.local)
+  ^[[2msource  ^[[0mgithub.com/gitronald/stanza, release v1.2.1
+  ^[[2mbin     ^[[0m~/.local/bin/stanza
+  ^[[2mlib     ^[[0m~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.local/share/bash-completion/completions/stanza
+  ^[[2mzsh     ^[[0m~/.local/share/zsh/site-functions/_stanza
+  ^[[2mrule    ^[[0m~/.claude/rules/stanza.md
+
+  ^[[2mfetch   ^[[0mstanza-1.2.1.tar.gz
+  ^[[2mverify  ^[[0msha256 c1bd4acb2dae7efe
+  ^[[2mfiles   ^[[0m~/.local/bin/stanza, ~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.local/share/bash-completion/completions/stanza
+  ^[[2mzsh     ^[[0m~/.local/share/zsh/site-functions/_stanza
+  ^[[2mrule    ^[[0m~/.claude/rules/stanza.md
+  ^[[0;33mwarn    ^[[0m~/.local/bin is not on your PATH
+  ^[[0;36mhint    ^[[0mecho 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  ^[[0;32mdone    ^[[0mstanza 1.2.1. Open a new terminal, then run: stanza --help
+
+##### tty-no-color #####
+stanza install  (v1.2.1, ~/.local)
+  source  github.com/gitronald/stanza, release v1.2.1
+  bin     ~/.local/bin/stanza
+  lib     ~/.local/lib/stanza
+  bash    ~/.bash_completion.d/stanza
+  zsh     ~/.zsh/completions/_stanza
+
+  fetch   stanza-1.2.1.tar.gz
+  verify  sha256 c1bd4acb2dae7efe
+  files   ~/.local/bin/stanza, ~/.local/lib/stanza
+  bash    ~/.bash_completion.d/stanza
+  hint    add to ~/.bash_profile: for f in ~/.bash_completion.d/*; do . "$f"; done
+  zsh     ~/.zsh/completions/_stanza
+  hint    add to ~/.zshrc: fpath=(~/.zsh/completions $fpath)
+          and, if it has no compinit: autoload -Uz compinit && compinit
+  hint    no ~/.claude, so no rule; to add it later: stanza rules install
+  warn    ~/.local/bin is not on your PATH
+  hint    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  done    stanza 1.2.1. Open a new terminal, then run: stanza --help
+
+##### tty-term-dumb #####
+stanza install  (v1.2.1, ~/.local)
+  source  github.com/gitronald/stanza, release v1.2.1
+  bin     ~/.local/bin/stanza
+  lib     ~/.local/lib/stanza
+  bash    ~/.bash_completion.d/stanza
+  zsh     ~/.zsh/completions/_stanza
+
+  fetch   stanza-1.2.1.tar.gz
+  verify  sha256 c1bd4acb2dae7efe
+  files   ~/.local/bin/stanza, ~/.local/lib/stanza
+  bash    ~/.bash_completion.d/stanza
+  hint    add to ~/.bash_profile: for f in ~/.bash_completion.d/*; do . "$f"; done
+  zsh     ~/.zsh/completions/_stanza
+  hint    add to ~/.zshrc: fpath=(~/.zsh/completions $fpath)
+          and, if it has no compinit: autoload -Uz compinit && compinit
+  hint    no ~/.claude, so no rule; to add it later: stanza rules install
+  warn    ~/.local/bin is not on your PATH
+  hint    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  done    stanza 1.2.1. Open a new terminal, then run: stanza --help
+
+##### tty-lang-c #####
+^[[1mstanza install^[[0m  (v1.2.1, ~/.local)
+  ^[[2msource  ^[[0mgithub.com/gitronald/stanza, release v1.2.1
+  ^[[2mbin     ^[[0m~/.local/bin/stanza
+  ^[[2mlib     ^[[0m~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.bash_completion.d/stanza
+  ^[[2mzsh     ^[[0m~/.zsh/completions/_stanza
+
+  ^[[2mfetch   ^[[0mstanza-1.2.1.tar.gz
+  ^[[2mverify  ^[[0msha256 c1bd4acb2dae7efe
+  ^[[2mfiles   ^[[0m~/.local/bin/stanza, ~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.bash_completion.d/stanza
+  ^[[0;36mhint    ^[[0madd to ~/.bash_profile: for f in ~/.bash_completion.d/*; do . "$f"; done
+  ^[[2mzsh     ^[[0m~/.zsh/completions/_stanza
+  ^[[0;36mhint    ^[[0madd to ~/.zshrc: fpath=(~/.zsh/completions $fpath)
+          and, if it has no compinit: autoload -Uz compinit && compinit
+  ^[[0;36mhint    ^[[0mno ~/.claude, so no rule; to add it later: stanza rules install
+  ^[[0;33mwarn    ^[[0m~/.local/bin is not on your PATH
+  ^[[0;36mhint    ^[[0mecho 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  ^[[0;32mdone    ^[[0mstanza 1.2.1. Open a new terminal, then run: stanza --help
+
+##### tty-sha-mismatch #####
+^[[1mstanza install^[[0m  (v1.2.1, ~/.local)
+  ^[[2msource  ^[[0mfile:///tmp/badrepo, release v1.2.1
+  ^[[2mbin     ^[[0m~/.local/bin/stanza
+  ^[[2mlib     ^[[0m~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.bash_completion.d/stanza
+  ^[[2mzsh     ^[[0m~/.zsh/completions/_stanza
+
+  ^[[2mfetch   ^[[0mstanza-1.2.1.tar.gz
+  ^[[0;31merror   ^[[0msha256 mismatch for stanza-1.2.1.tar.gz; nothing was installed
+          expected 0000000000000000000000000000000000000000000000000000000000000000
+          actual   c1bd4acb2dae7efee98a451255766c32a879b9856fe9e265ed3ba5f5e68b096d
+  ^[[0;36mhint    ^[[0mretry; if it fails again: file:///tmp/badrepo/issues
+
+##### tty-uninstall #####
+^[[1mstanza uninstall^[[0m  (~/.local)
+  ^[[2mbin     ^[[0m~/.local/bin/stanza
+  ^[[2mlib     ^[[0m~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.local/share/bash-completion/completions/stanza
+  ^[[2mzsh     ^[[0m~/.local/share/zsh/site-functions/_stanza
+  ^[[2mrule    ^[[0m~/.claude/rules/stanza.md
+
+  ^[[2mbin     ^[[0m~/.local/bin/stanza
+  ^[[2mlib     ^[[0m~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.local/share/bash-completion/completions/stanza
+  ^[[2mzsh     ^[[0m~/.local/share/zsh/site-functions/_stanza
+  ^[[2mrule    ^[[0m~/.claude/rules/stanza.md
+  ^[[0;32mdone    ^[[0mstanza uninstalled; 5 items removed
+
+##### piped-latest (cat install.sh | bash > log 2>&1) #####
+stanza install  (v1.2.1, ~/.local)
+  source  github.com/gitronald/stanza, release v1.2.1
+  bin     ~/.local/bin/stanza
+  lib     ~/.local/lib/stanza
+  bash    ~/.bash_completion.d/stanza
+  zsh     ~/.zsh/completions/_stanza
+
+  fetch   stanza-1.2.1.tar.gz
+  verify  sha256 c1bd4acb2dae7efe
+  files   ~/.local/bin/stanza, ~/.local/lib/stanza
+  bash    ~/.bash_completion.d/stanza
+  hint    add to ~/.bash_profile: for f in ~/.bash_completion.d/*; do . "$f"; done
+  zsh     ~/.zsh/completions/_stanza
+  hint    add to ~/.zshrc: fpath=(~/.zsh/completions $fpath)
+          and, if it has no compinit: autoload -Uz compinit && compinit
+  hint    no ~/.claude, so no rule; to add it later: stanza rules install
+  warn    ~/.local/bin is not on your PATH
+  hint    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  done    stanza 1.2.1. Open a new terminal, then run: stanza --help
+
+##### piped-clicolor-force (CLICOLOR_FORCE=1, piped) #####
+^[[1mstanza install^[[0m  (v1.2.1, ~/.local)
+  ^[[2msource  ^[[0mgithub.com/gitronald/stanza, release v1.2.1
+  ^[[2mbin     ^[[0m~/.local/bin/stanza
+  ^[[2mlib     ^[[0m~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.bash_completion.d/stanza
+  ^[[2mzsh     ^[[0m~/.zsh/completions/_stanza
+
+  ^[[2mfetch   ^[[0mstanza-1.2.1.tar.gz
+  ^[[2mverify  ^[[0msha256 c1bd4acb2dae7efe
+  ^[[2mfiles   ^[[0m~/.local/bin/stanza, ~/.local/lib/stanza
+  ^[[2mbash    ^[[0m~/.bash_completion.d/stanza
+  ^[[0;36mhint    ^[[0madd to ~/.bash_profile: for f in ~/.bash_completion.d/*; do . "$f"; done
+  ^[[2mzsh     ^[[0m~/.zsh/completions/_stanza
+  ^[[0;36mhint    ^[[0madd to ~/.zshrc: fpath=(~/.zsh/completions $fpath)
+          and, if it has no compinit: autoload -Uz compinit && compinit
+  ^[[0;36mhint    ^[[0mno ~/.claude, so no rule; to add it later: stanza rules install
+  ^[[0;33mwarn    ^[[0m~/.local/bin is not on your PATH
+  ^[[0;36mhint    ^[[0mecho 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  ^[[0;32mdone    ^[[0mstanza 1.2.1. Open a new terminal, then run: stanza --help
