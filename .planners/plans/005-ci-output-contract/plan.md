@@ -149,15 +149,36 @@ on whatever bash that machine has (5.x here). Two gaps follow.
     10s).
 - **2026-10-11T04:32:08-07:00** — Reactivated: back to active after review.
 
+- **2026-10-11T04:46:49-07:00** — Failure documents for `init` and `rules`
+  (Handoff question 1, answered at the review gate: do it in this PR).
+  Commits `deb04d5`..`80d9bd5`; CI run 38136500434 green, 1685 checks on
+  Linux and on macOS bash 3.2.57.
+  - `lib/stanza-common`: `json_failure_trap COMMAND [ACTION]` sets an EXIT
+    trap that, on a non-zero exit under `--json`, prints
+    `{"command","action"?,"ok":false,"error","hint"}`. `json_emit` sets
+    `JSON_EMITTED`, so a command that already printed its document
+    (`rules check` exits 1 when the rule drifted) gets no second one.
+  - `init` and `rules` documents carry `ok`. `rules check` sets it from its
+    status, so `ok` matches the exit status.
+  - Release's trap now sits before argument parsing, so a usage error
+    (unknown option, missing bump type) gets its failure document, with
+    `failed_step: "preflight"`. `scan_json_flag` finds a `--json` placed
+    after the bad option (raised by the delta review). The "Use -h or
+    --help" line moved to stderr in all three commands.
+  - Matrix: init and rules failures expect a document. A `usage` failure
+    runs on every row. `-q` text failures print nothing on stdout. Targeted
+    cases cover `rules check` drift and `--json` placed last. 580 checks.
+    Mutations caught: no init trap (8), no `JSON_EMITTED` guard (2), the
+    usage line back on stdout (5), no release trap (48), and no prescan (3).
+  - Delta review (correctness, low): one finding, the `--json`-last case,
+    fixed as above.
 ## Handoff
 
 - **State.** All work is committed and pushed on
-  `feature/ci-output-contract` (PR #20); CI is green; the review gate ran and its findings are fixed.
-- **Open questions.**
-  1. Should `init` and `rules` emit a failure document (`ok:false`, `error`,
-     `hint`) on stdout under `--json`, as `release` does? Today they print
-     nothing on stdout and the error on stderr. The matrix pins the current
-     behavior (`gh:empty`, `handwritten:empty`); changing it is a schema
-     addition and a two-cell edit in the table.
+  `feature/ci-output-contract` (PR #20); CI is green, and the review gate ran
+  on the full diff and on the follow-up delta.
+- **Questions.**
+  1. Should `init` and `rules` emit a failure document under `--json`?
+     **Answered 2026-10-11: yes, in this PR.** Done; see the 04:46 Log entry.
 - **Not verified.** The badge renders only once `test.yml` runs on `main`,
   so it shows no status until the next release merges.
