@@ -6,6 +6,7 @@ set -e
 # Source shared utilities
 # shellcheck source=stanza-common
 source "$(dirname "${BASH_SOURCE[0]:-$0}")/stanza-common"
+json_failure_trap init
 
 # Default values
 REPO_NAME=""
@@ -62,7 +63,7 @@ while [[ $# -gt 0 ]]; do
                 shift
             else
                 print_error "Unknown option '$1'"
-                echo "Use -h or --help for usage information"
+                echo "Use -h or --help for usage information" >&2
                 exit 1
             fi
             ;;
@@ -80,7 +81,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             print_error "Unknown option '$1'"
-            echo "Use -h or --help for usage information"
+            echo "Use -h or --help for usage information" >&2
             exit 1
             ;;
     esac
@@ -274,6 +275,7 @@ fi
 
 # JSON output
 json_set command "init"
+json_set_raw ok true
 json_set repo_name "$REPO_NAME"
 json_set repo_url "$REPO_URL"
 json_set visibility "$VISIBILITY"

@@ -550,6 +550,11 @@ case "${1:-}" in
     merge) PHASE="merge"; shift ;;
 esac
 
+# From here on a failed run names its step and how to resume (see
+# on_release_exit); a usage error fails at "preflight", before any step
+STANZA_ERROR_LOG=$(mktemp "${TMPDIR:-/tmp}/stanza-error.XXXXXX" 2>/dev/null) || STANZA_ERROR_LOG=""
+trap on_release_exit EXIT
+
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -572,7 +577,7 @@ while [[ $# -gt 0 ]]; do
                 shift
             else
                 print_error "Unknown option '$1'"
-                echo "Use -h or --help for usage information"
+                echo "Use -h or --help for usage information" >&2
                 exit 1
             fi
             ;;
@@ -637,7 +642,7 @@ while [[ $# -gt 0 ]]; do
                 shift
             else
                 print_error "Unknown option '$1'"
-                echo "Use -h or --help for usage information"
+                echo "Use -h or --help for usage information" >&2
                 exit 1
             fi
             ;;
@@ -655,7 +660,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             print_error "Unknown option '$1'"
-            echo "Use -h or --help for usage information"
+            echo "Use -h or --help for usage information" >&2
             exit 1
             ;;
     esac
@@ -778,10 +783,6 @@ elif [[ -z "$BUMP_TYPE" ]]; then
     print_release_help
     exit 0
 fi
-
-# From here on a failed run names its step and how to resume (see on_release_exit).
-STANZA_ERROR_LOG=$(mktemp "${TMPDIR:-/tmp}/stanza-error.XXXXXX" 2>/dev/null) || STANZA_ERROR_LOG=""
-trap on_release_exit EXIT
 
 # Deferred initialization (after help check, so --help works without a version file)
 CURRENT_VERSION=$(get_current_version) || exit 1

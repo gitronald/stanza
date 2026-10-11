@@ -234,7 +234,7 @@ test_json() {
     assert_contains "flag after subcommand, status up_to_date" "$out" '"status":"up_to_date"'
 
     out=$("$STANZA" --json rules check)
-    assert_contains "check overall status" "$out" '"action":"check","status":"ok"'
+    assert_contains "check overall status" "$out" '"action":"check","ok":true,"status":"ok"'
     assert_contains "check lists locations" "$out" "{\"scope\":\"global\",\"path\":\"$GLOBAL_RULE\",\"status\":\"ok\"}"
 
     out=$("$STANZA" --json rules uninstall)
