@@ -29,6 +29,21 @@ JSON_OUTPUT="${JSON_OUTPUT:-false}"
 NO_COLOR_OVERRIDE="${NO_COLOR_OVERRIDE:-false}"
 QUIET_REQUESTED="${QUIET_REQUESTED:-false}"
 VERBOSE_REQUESTED="${VERBOSE_REQUESTED:-false}"
+VERBOSE="${VERBOSE:-false}"
+
+# Set JSON_OUTPUT when --json is anywhere in a command's arguments. Called
+# before the option loop, which stops at the first unknown option: a usage
+# error then still gets its JSON failure document when --json comes after it.
+# Usage: scan_json_flag "$@"
+scan_json_flag() {
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "--json" ]]; then
+            JSON_OUTPUT=true
+        fi
+    done
+    return 0
+}
 
 # Validate that --quiet and --verbose were not both requested at any level.
 # Call after subcommand argument parsing.
@@ -94,7 +109,7 @@ print_row() {
 print_done() {
     [[ "$JSON_OUTPUT" == "true" ]] && return 0
     [[ "$VERBOSITY" -lt 1 ]] && return 0
-    _print_label_row "$GREEN" done "$1"
+    _print_label_row "$GREEN" "done" "$1"
 }
 
 # Print a hint row to stderr (remediation suggestion).
@@ -127,6 +142,8 @@ print_row_v() {
 # arrays so the helpers work on bash 3.2 (the macOS default).
 
 JSON_BUFFER=""
+# Set by json_emit, so an exit trap never prints a second document.
+JSON_EMITTED=false
 
 # Escape a string for JSON output: backslashes, double quotes, all controls.
 # Bash strings cannot contain NUL; every other byte below 0x20 is escaped.
@@ -198,6 +215,46 @@ json_emit() {
     local body="\"schema_version\":1${JSON_BUFFER}"
     printf "{%s}\n" "$body"
     JSON_BUFFER=""
+    JSON_EMITTED=true
+}
+
+# Failure document for a command with no steps of its own (init, rules).
+# json_failure_trap COMMAND [ACTION] sets an EXIT trap: on a non-zero exit with
+# --json, unless the command already printed its document, stdout gets
+#   {"schema_version":1,"command":...,"action":...,"ok":false,"error":...,"hint":...}
+# action only when given. error is the last print_error message, read from
+# STANZA_ERROR_LOG so an error printed inside $(...) counts; hint is the hints
+# printed after it. Either is null when there is none. The exit status is kept.
+# stanza release has its own trap (on_release_exit), which adds its steps.
+json_failure_trap() {
+    STANZA_FAILURE_COMMAND="$1"
+    STANZA_FAILURE_ACTION="${2:-}"
+    STANZA_ERROR_LOG=$(mktemp "${TMPDIR:-/tmp}/stanza-error.XXXXXX" 2>/dev/null) || STANZA_ERROR_LOG=""
+    trap on_command_exit EXIT
+}
+
+on_command_exit() {
+    local status=$?
+    trap - EXIT
+    local error="$STANZA_LAST_ERROR"
+    if [[ -n "$STANZA_ERROR_LOG" ]]; then
+        if [[ -s "$STANZA_ERROR_LOG" ]]; then
+            error=$(cat "$STANZA_ERROR_LOG")
+        fi
+        rm -f "$STANZA_ERROR_LOG"
+    fi
+    if [[ $status -ne 0 && "$JSON_OUTPUT" == "true" && "$JSON_EMITTED" != "true" ]]; then
+        JSON_BUFFER=""
+        json_set command "$STANZA_FAILURE_COMMAND"
+        if [[ -n "$STANZA_FAILURE_ACTION" ]]; then
+            json_set action "$STANZA_FAILURE_ACTION"
+        fi
+        json_set_raw ok false
+        json_set_or_null error "$error"
+        json_set_or_null hint "$STANZA_HINTS"
+        json_emit
+    fi
+    exit "$status"
 }
 
 # ------------------------------------------------------------------------------
@@ -222,6 +279,7 @@ print_warning() {
 # printed inside $(...) still reaches the caller's exit trap.
 STANZA_LAST_ERROR=""
 STANZA_ERROR_LOG=""
+# shellcheck disable=SC2034  # STANZA_LAST_ERROR is read by stanza-release
 print_error() {
     STANZA_LAST_ERROR="$1"
     STANZA_HINTS=""

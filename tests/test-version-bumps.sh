@@ -6,6 +6,13 @@ STANZA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 PASS=0
 FAIL=0
 
+# The suite's own identity, so commits work without a global git config
+GIT_AUTHOR_NAME=t
+GIT_AUTHOR_EMAIL=t@t
+GIT_COMMITTER_NAME=t
+GIT_COMMITTER_EMAIL=t@t
+export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+
 # --- Helpers ---------------------------------------------------------------
 
 setup_repo() {

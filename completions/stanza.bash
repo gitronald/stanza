@@ -142,7 +142,12 @@ _stanza_completion() {
     esac
 
     if [[ -n "$candidates" ]]; then
-        COMPREPLY=($(compgen -W "$candidates" -- "$cur"))
+        # A read loop, not mapfile: bash 3.2 has no mapfile
+        local word
+        COMPREPLY=()
+        while IFS= read -r word; do
+            COMPREPLY+=("$word")
+        done < <(compgen -W "$candidates" -- "$cur")
     fi
 
     return 0

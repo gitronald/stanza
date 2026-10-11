@@ -57,7 +57,8 @@ setup() {
     git -c init.defaultBranch=main init -q "$TEST_TMPDIR/repo"
     cd "$TEST_TMPDIR/repo"
     GLOBAL_RULE="$HOME/.claude/rules/stanza.md"
-    LOCAL_RULE="$TEST_TMPDIR/repo/.claude/rules/stanza.md"
+    # The physical path, as git reports the toplevel (macOS: /var -> /private/var)
+    LOCAL_RULE="$(pwd -P)/.claude/rules/stanza.md"
 }
 
 cleanup() {
@@ -233,7 +234,7 @@ test_json() {
     assert_contains "flag after subcommand, status up_to_date" "$out" '"status":"up_to_date"'
 
     out=$("$STANZA" --json rules check)
-    assert_contains "check overall status" "$out" '"action":"check","status":"ok"'
+    assert_contains "check overall status" "$out" '"action":"check","ok":true,"status":"ok"'
     assert_contains "check lists locations" "$out" "{\"scope\":\"global\",\"path\":\"$GLOBAL_RULE\",\"status\":\"ok\"}"
 
     out=$("$STANZA" --json rules uninstall)
