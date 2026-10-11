@@ -1,8 +1,8 @@
 ---
 id: 4
 slug: release-preflight
-status: draft
-branch:
+status: active
+branch: feature/release-preflight
 created: 2026-10-09T18:49:08-07:00
 concluded:
 pr:
@@ -64,3 +64,11 @@ before the bump commit; several failures reported in one run.
 
 1 -> 2 -> 3 -> 4 -> 5. Land after plan 003, or coordinate: both touch the
 step boundaries in `lib/stanza-release`.
+
+## Log
+
+- **2026-10-10T23:30:34-07:00** — Activated.
+  - Branch: `feature/release-preflight`
+  - Base: `dev` at `66df759`
+  - Worktree: `.worktrees/release-preflight`
+  - PR: pending
