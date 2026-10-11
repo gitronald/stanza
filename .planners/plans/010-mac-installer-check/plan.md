@@ -1,10 +1,10 @@
 ---
 id: 10
 slug: mac-installer-check
-status: active
+status: done
 branch: feature/mac-installer-check
 created: 2026-10-10T13:59:48-07:00
-concluded:
+concluded: 2026-10-10T17:29:47-07:00
 pr: https://github.com/gitronald/stanza/pull/13
 ---
 
@@ -110,7 +110,7 @@ pty from BSD `script`, installing release v1.2.1 through the checkout's
 | Terminal, Pro profile | Same rendering on black; dim labels, `done`, and `hint` readable |
 | Bright colors for bold | Header is bold with no color, and no label is bold (`SGR_WARN='0;33'`, test `warn: not bold`); nothing for the setting to change |
 | iTerm2 | Not installed on this Mac; not run |
-| Piped, `cat -v` | No `^[[` sequences; 20 rows, exit 0 |
+| Piped, `cat -v` | No `^[[` sequences; 18 rows, exit 0 |
 | `NO_COLOR=1` in a tty | No color |
 | `CLICOLOR_FORCE=1` piped | Color present |
 | `TERM=dumb` | No color, no `tput` errors on stderr |
@@ -138,8 +138,65 @@ The real reinstall on this machine, from the checkout with
 
 - `warn` stays yellow: Terminal's non-bold ANSI yellow is dark enough on
   the Basic profile's white, so 009's trade-off holds.
-- One small fix on this branch: `tests/test-install.sh` now runs its
+- One small fix on this branch: the installer test suite now runs its
   three pty color cases under BSD `script` on Darwin, so the suite passes
   107 on macOS instead of skipping them.
 - Real Terminal screenshots need a Screen Recording grant for the shell
   that runs `screencapture`; the renderings stand in until then.
+
+### 2026-10-10: review follow-up
+
+Reviewed PR #13 before merging. Raised and actioned:
+
+- The BSD `script` fallback had landed in `tests/test-install.sh` only,
+  while `tests/test-output-modes.sh` kept the util-linux-only gate, so its
+  four `stanza release` pty color cases still skipped on a Mac. Both suites
+  now source `tests/pty.sh`, which defines `in_pty` once, probes the
+  `script` dialect by running it instead of checking `uname -s`, and strips
+  the CR and echoed EOF bytes BSD `script` adds so both dialects return the
+  same bytes for the color assertions. On this Mac the output-modes suite
+  passes 50 with those four cases running, and the installer suite 107.
+- The comment on the `/dev/null` redirect gave the wrong reason. BSD
+  `script` opens a pty regardless of stdin; the redirect keeps it from
+  raw-moding the suite's own terminal. Comment rewritten in the helper.
+- The piped-case row said 20 rows; the capture has 18. Corrected.
+
+Conscious no-ops:
+
+- The two PNG renderings stay committed. The plan asks for images of the
+  Basic and Pro runs, and the HTML mockup from 009 already shows the
+  palette-free version.
+- The raw capture file keeps its byte-identical duplicate blocks and the
+  `file:///tmp/badrepo` URL. It is a verbatim capture, and `/tmp` names no
+  user or machine.
+
+### Remaining
+
+Not done here, and not blocking the close. Pick up on a Mac with the
+grants or hardware available:
+
+- Real Terminal screenshots of the Basic and Pro profiles, with the
+  "Use bright colors for bold text" setting toggled live, once the shell
+  has a Screen Recording grant or by capturing by hand.
+- iTerm2 (not installed here) and an Intel Mac (not available).
+- The `curl | bash` one-liner from `main`, once the next release puts the
+  ledger installer on `main`.
+
+## Retrospective
+
+- Nearly everything 009 constrained held on a real Mac without change:
+  bash 3.2, the color gate, the PATH hint by shell, the fallback completion
+  paths, and the checksum failure path all matched the mockup.
+- The one real gap was test coverage, not the installer: the pty color
+  cases had only ever run on Linux. Fixing that in one suite and not the
+  other is exactly the drift the review caught, and a shared helper was
+  the right altitude for the fix.
+- Probing a tool's dialect by running it beat keying on the OS name. It
+  covers FreeBSD for free and does not lie when a different `script` is
+  first on `PATH`.
+- Captures through `cat -v` were enough evidence for every case but the
+  visual ones. For those, renderings stand in, and the plan should have
+  said up front what to do when a screenshot cannot be taken from the
+  shell.
+- The 009 trade-off on the yellow `warn` label survived contact with the
+  Basic profile, so no palette change was needed.
