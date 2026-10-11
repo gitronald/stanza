@@ -5,7 +5,8 @@
 #              run is held to the same rules:
 #                - exit 0 on success, non-zero on failure
 #                - --json: stdout is one JSON document on one line, naming the
-#                  command; everything else went to stderr
+#                  command; everything else went to stderr. On success it
+#                  carries the -q value; a failed release names its step
 #                - -q text: stdout is the one documented value on success
 #                - text: stdout never carries a JSON document
 #              A new command is a row in COMMANDS, not a new block.
@@ -94,28 +95,30 @@ fail_handwritten() {
 }
 
 # --- The table ---------------------------------------------------------------
-# id | setup | stanza arguments | JSON command | -q text value | failures
+# id | setup | stanza arguments | JSON command | -q value | JSON field | failures
 #
-# A failure is fail_<name>:<stdout in --json>, where the stdout is "doc" (one
-# JSON document with ok=false) or "empty". The -q value is expanded per case
-# (it may name $T).
+# The -q value is what -q prints in text mode and what the jq filter in JSON
+# field reads from the --json document; @T@ in it stands for the case's $T.
+# A failure is fail_<name>:<expect>, where expect is the failed_step of the
+# release's ok=false document, or "empty" for a command that prints nothing on
+# stdout when it fails.
 COMMANDS='
-release-full|setup_alpha|release patch --local -y|release|0.1.0|hook:doc dirty:doc
-release-pr|setup_alpha|release pr patch --local -y|release|0.1.0|hook:doc dirty:doc
-release-merge|setup_stable|release merge --local -y|release|0.1.0|hook:doc dirty:doc
-release-prerelease|setup_alpha|release prerelease --local -y|release|0.1.0a1|hook:doc dirty:doc
-init|setup_init|init -y|init|https://example.test/repo|gh:empty
-rules-install|setup_stable|rules install|rules|$T/home/.claude/rules/stanza.md|handwritten:empty
+release-full|setup_alpha|release patch --local -y|release|0.1.0|.to_version|hook:bump dirty:preflight
+release-pr|setup_alpha|release pr patch --local -y|release|0.1.0|.to_version|hook:bump dirty:preflight
+release-merge|setup_stable|release merge --local -y|release|0.1.0|.tag.name[1:]|hook:cycle dirty:preflight
+release-prerelease|setup_alpha|release prerelease --local -y|release|0.1.0a1|.to_version|hook:bump dirty:preflight
+init|setup_init|init -y|init|https://example.test/repo|.repo_url|gh:empty
+rules-install|setup_stable|rules install|rules|@T@/home/.claude/rules/stanza.md|.path|handwritten:empty
 '
 
 # --- One case ------------------------------------------------------------------
 
-# check_case ID SETUP ARGS JSON_COMMAND QUIET_VALUE VERBOSITY MODE FAILURE EXPECT
-# VERBOSITY is -q, -v, -vv, or "" (default); MODE is text or json; FAILURE is
-# empty for the success case.
+# check_case ID SETUP ARGS JSON_COMMAND QUIET_VALUE JSON_FIELD VERBOSITY MODE FAILURE EXPECT
+# VERBOSITY is -q, -v, -vv, or "" (default); MODE is text or json; FAILURE and
+# EXPECT are empty for the success case.
 check_case() {
-    local id="$1" setup="$2" args="$3" command="$4" quiet_value="$5"
-    local verbosity="$6" mode="$7" failure="$8" expect="$9"
+    local id="$1" setup="$2" args="$3" command="$4" quiet_value="$5" field="$6"
+    local verbosity="$7" mode="$8" failure="$9" expect="${10}"
     local label="$id ${verbosity:-default} $mode ${failure:-success}"
     local -a flags=()
     [[ -n "$verbosity" ]] && flags+=("$verbosity")
@@ -127,8 +130,9 @@ check_case() {
     # shellcheck disable=SC2086  # ARGS is a word list from the table
     HOME="$T/home" PATH="$T/bin:$PATH" "$STANZA" ${flags[@]+"${flags[@]}"} $args \
         > "$T/stdout" 2> "$T/stderr" < /dev/null || status=$?
-    local out
+    local out want
     out=$(cat "$T/stdout")
+    want="${quiet_value//@T@/$T}"
 
     if [[ -z "$failure" ]]; then
         [[ $status -eq 0 ]] && pass || fail "$label: exit $status, expected 0
@@ -148,22 +152,26 @@ $(sed 's/^/      /' "$T/stderr")"
                 pass
             else
                 fail "$label: stdout is not one JSON line (documents: $count, lines: $lines): $out"
+                cleanup
                 return 0
             fi
             jq -e --arg c "$command" '.command == $c and .schema_version == 1' "$T/stdout" > /dev/null \
                 && pass || fail "$label: command is not \"$command\": $out"
-            if [[ "$command" == release ]]; then
-                local ok=true
-                [[ -n "$failure" ]] && ok=false
-                jq -e --argjson ok "$ok" '.ok == $ok' "$T/stdout" > /dev/null \
-                    && pass || fail "$label: ok is not $ok: $out"
+            if [[ -z "$failure" ]]; then
+                local got
+                got=$(jq -r "$field" "$T/stdout")
+                [[ "$got" == "$want" ]] && pass || fail "$label: $field is '$got', expected '$want'"
+                if [[ "$command" == release ]]; then
+                    jq -e '.ok == true' "$T/stdout" > /dev/null && pass || fail "$label: ok is not true: $out"
+                fi
+            else
+                jq -e --arg step "$expect" '.ok == false and .failed_step == $step' "$T/stdout" > /dev/null \
+                    && pass || fail "$label: expected ok=false at step $expect: $out"
             fi
         fi
     else
         [[ "$out" != *'"schema_version"'* ]] && pass || fail "$label: JSON on stdout in text mode"
         if [[ "$verbosity" == -q && -z "$failure" ]]; then
-            local want
-            want=$(eval "printf '%s' \"$quiet_value\"")
             [[ "$out" == "$want" ]] && pass || fail "$label: stdout is '$out', expected '$want'"
         fi
     fi
@@ -172,14 +180,14 @@ $(sed 's/^/      /' "$T/stderr")"
 
 # --- The matrix ----------------------------------------------------------------
 
-while IFS='|' read -r id setup args command quiet_value failures; do
+while IFS='|' read -r id setup args command quiet_value field failures; do
     [[ -n "$id" ]] || continue
     echo "$id"
     for verbosity in -q "" -v -vv; do
         for mode in text json; do
-            check_case "$id" "$setup" "$args" "$command" "$quiet_value" "$verbosity" "$mode" "" doc
+            check_case "$id" "$setup" "$args" "$command" "$quiet_value" "$field" "$verbosity" "$mode" "" ""
             for f in $failures; do
-                check_case "$id" "$setup" "$args" "$command" "$quiet_value" "$verbosity" "$mode" "${f%%:*}" "${f#*:}"
+                check_case "$id" "$setup" "$args" "$command" "$quiet_value" "$field" "$verbosity" "$mode" "${f%%:*}" "${f#*:}"
             done
         done
     done
