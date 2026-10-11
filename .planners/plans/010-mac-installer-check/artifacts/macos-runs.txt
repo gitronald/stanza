@@ -1,5 +1,8 @@
 # macOS installer runs, 2026-10-10 (macOS 26.6.2, bash 3.2.57, Terminal 2.15, arm64)
-# Raw PTY captures through cat -v; HOME points at an empty directory in every case.
+# Captures through cat -v. The tty-* blocks ran under a pty from BSD script with the
+# CR of each CRLF and the echoed EOF removed; the piped-* blocks are file redirections.
+# HOME starts empty except where the case seeds it (share-and-claude) or needs a prior
+# install (uninstall).
 
 ##### tty-zsh-clean #####
 ^[[1mstanza install^[[0m  (v1.2.1, ~/.local)
@@ -153,7 +156,6 @@ stanza install  (v1.2.1, ~/.local)
   ^[[2mzsh     ^[[0m~/.local/share/zsh/site-functions/_stanza
   ^[[2mrule    ^[[0m~/.claude/rules/stanza.md
   ^[[0;32mdone    ^[[0mstanza uninstalled; 5 items removed
-exit 0
 
 ##### piped-latest (cat install.sh | bash > log 2>&1) #####
 stanza install  (v1.2.1, ~/.local)

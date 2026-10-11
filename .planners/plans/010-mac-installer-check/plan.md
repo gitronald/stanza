@@ -100,7 +100,7 @@ titles first; this repo is public).
 ### 2026-10-10: runs on a Mac
 
 macOS 26.6.2, Apple silicon, `/bin/bash` 3.2.57(1)-release, Terminal 2.15,
-`SHELL=/bin/zsh`. Each case ran with `HOME` at an empty directory, under a
+`SHELL=/bin/zsh`. The tty cases ran with `HOME` at an empty directory, under a
 pty from BSD `script`, installing release v1.2.1 through the checkout's
 `install.sh --version=1.2.1`; raw captures are in `artifacts/macos-runs.txt`.
 
@@ -119,7 +119,7 @@ pty from BSD `script`, installing release v1.2.1 through the checkout's
 | `SHELL=/bin/bash` | Same hint ending in `~/.bash_profile` |
 | `~/.local/share` missing | `~/.bash_completion.d/stanza` and `~/.zsh/completions/_stanza` named before the prompt and in the rows, each followed by its `hint` (the zsh one with a continuation row) |
 | No `~/.claude` | No `rule` row; `hint    no ~/.claude, so no rule; to add it later: stanza rules install` |
-| `~/.local/share` and `~/.claude` present | Completions under `~/.local/share`, `rule    ~/.claude/rules/stanza.md`, no hints |
+| `~/.local/share` and `~/.claude` present | Completions under `~/.local/share`, `rule    ~/.claude/rules/stanza.md`, no completion or rule hints |
 | Checksum mismatch (`STANZA_REPO_URL` at a `file://` copy with a zeroed `.sha256`) | `error`, expected/actual continuation rows, and `hint` on stderr; stdout stops after `fetch`; exit 1; `HOME` still empty |
 | `uninstall.sh` | Header `stanza uninstall  (~/.local)`, a row per path before and after, `done    stanza uninstalled; 5 items removed`; a second run reports `error   no stanza installation found` on stderr, exit 1 |
 | Intel | Not available |
@@ -200,3 +200,18 @@ grants or hardware available:
   shell.
 - The 009 trade-off on the yellow `warn` label survived contact with the
   Basic profile, so no palette change was needed.
+
+### 2026-10-10: post-merge review addendum
+
+The review's late findings landed after PR #13 merged and were fixed on
+`dev`:
+
+- The shared `in_pty` piped `script` into `tr`, so the child's exit
+  status was lost on macOS, and its `tr -d '\004'` never matched the
+  echoed EOF, which the pty prints as the two characters `^D`. The BSD
+  wrapper now runs under `pipefail` and strips the literal `^D` prefix.
+- The capture file's header claimed raw captures with an empty `HOME` in
+  every case. It now says the CRs and echoed EOF were removed, that the
+  piped blocks are file redirections, and which cases seeded `HOME`. A
+  stray `exit 0` line was dropped, and the method sentence and the
+  seeded-`HOME` row above were corrected to match.
