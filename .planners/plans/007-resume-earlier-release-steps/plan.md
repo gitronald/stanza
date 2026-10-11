@@ -1,8 +1,8 @@
 ---
 id: 7
 slug: resume-earlier-release-steps
-status: draft
-branch:
+status: active
+branch: feature/resume-earlier-release-steps
 created: 2026-10-09T23:02:03-07:00
 concluded:
 pr:
@@ -60,3 +60,11 @@ then `release pr` re-run; a `--local --no-dev-cycle` release, then a remote
 ### Out of scope
 
 - The preflight checks before the first mutation (plan 004).
+
+## Log
+
+- **2026-10-11T00:23:52-07:00** — Activated.
+  - Branch: `feature/resume-earlier-release-steps`
+  - Base: `dev` at `7966f2c`
+  - Worktree: `.worktrees/resume-earlier-release-steps`
+  - PR: pending
