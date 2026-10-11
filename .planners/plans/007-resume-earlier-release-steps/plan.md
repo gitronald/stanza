@@ -69,3 +69,54 @@ then `release pr` re-run; a `--local --no-dev-cycle` release, then a remote
   - Worktree: `.worktrees/resume-earlier-release-steps`
   - PR: pending
 - **2026-10-11T00:36:56-07:00** — PR opened: https://github.com/gitronald/stanza/pull/18
+- **2026-10-11T00:39:38-07:00** — Implemented all three cases, in the planned
+  order, each automated rather than left as a hint. Tests at `e4e06d1`: all
+  nine `tests/test-*.sh` files pass (release workflow 514 -> 594 checks).
+  - Case 3 (`8b82c84`): `resume_shipped_release` fetches the base branch
+    into `origin/<base>` and compares, instead of `fetch <base>:<base>`.
+    Behind or level: fast-forward. Ahead with the tag at its head: one
+    `git push --atomic` of the base branch and the tag. Diverged, or commits
+    after the tag: refuse before pushing anything. `find_shipped_release`
+    now checks origin for the tag on its prerelease path too, so a `--local`
+    release that ran its dev cycle is also pushed. The new test fails on the
+    old code (checked by pointing it at the main checkout's `bin/stanza`).
+  - Case 1 (`68243b7`): `find_merged_release` runs in the merge preflight
+    once no tag is found. When dev's head is on `origin/<base>`, it takes the
+    earliest merge commit on the ancestry path whose second parent is dev's
+    head, and requires its tree to equal dev's. A fast-forward (no merge
+    commit) or a tree mismatch is refused with a tag-by-hand hint.
+    `git_tag_version` takes an optional commit. The merge-step advice for a
+    merged PR is now `git checkout dev && stanza release merge`.
+  - Case 2 (`e0eec5a`): `find_unfinished_bump` matches dev's last commit
+    `version [patch|minor|major]: <version on dev>` with no tag locally or on
+    origin. The full and `pr` phases then skip the bump, the changelog check,
+    and the red-dev check, allow dev ahead of origin, push if needed, and
+    take an open PR whose title is the tag. A different bump type, a
+    differently titled open PR, or a bump already merged into origin's base
+    branch is refused. The push/pr advice is now the same command again.
+  - Decisions: case 1 does not require the `version [release]` subject (a PR
+    merged by hand in the web UI still resumes); the second parent and the
+    tree are the proof. The case 3 push runs without `--no-pr`, because a
+    `--local` release has no PR to go through, and a protected base branch
+    refuses the atomic push with nothing pushed.
+  - Side changes: the resume and re-run advice carries `--no-dev-cycle`
+    (it used to drop it). The full and `pr` JSON documents gain `resumed`,
+    and `from_version` is `null` on a resumed bump. `release --check`
+    reports `resumed` for full and `pr` too.
+  - Cost: every remote `release merge` preflight now does one extra
+    `git fetch origin <base>` (to look for a merge that has no tag).
+  - Docs (`e4e06d1`): help text, README, guide, CHANGELOG `[Unreleased]`.
+
+## Handoff
+
+State: implemented on `feature/resume-earlier-release-steps`, PR #18. All
+committed and pushed.
+
+Questions: none open.
+
+Not verified:
+
+- A run against real GitHub. The gh mock merges locally; real `gh pr merge`
+  leaves the local base branch behind, which the case 1 test simulates by
+  resetting it.
+- bash 3.2 (plan 005) and ShellCheck (not installed here).
