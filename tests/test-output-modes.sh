@@ -372,17 +372,18 @@ if [[ "$rows" == "$expect" ]]; then pass "header, row, done, and hint carry colo
 
 echo ""
 echo "stanza release colors its rows on a terminal"
-if script --version 2> /dev/null | grep -q util-linux; then
+. "$(dirname "$STANZA")/../tests/pty.sh"
+if declare -f in_pty > /dev/null; then
     fresh_repo_alpha
-    out=$(script -qec "env -u NO_COLOR TERM=xterm '$STANZA' release prerelease -y --local" /dev/null 2>&1)
+    out=$(in_pty "env -u NO_COLOR TERM=xterm '$STANZA' release prerelease -y --local")
     if [[ "$out" == *$'\033[2mbump'* ]]; then pass "dim label on a terminal"; else fail "dim label on a terminal: $(printf '%s' "$out" | cat -v)"; fi
     if [[ "$out" == *$'\033[0;32mdone'* ]]; then pass "green done on a terminal"; else fail "green done on a terminal"; fi
     if [[ "$out" == *$'\033[1mstanza release'* ]]; then pass "bold header on a terminal"; else fail "bold header on a terminal"; fi
-    out=$(script -qec "env NO_COLOR=1 TERM=xterm '$STANZA' release prerelease -y --local" /dev/null 2>&1)
+    out=$(in_pty "env NO_COLOR=1 TERM=xterm '$STANZA' release prerelease -y --local")
     if [[ "$out" != *$'\033'* ]]; then pass "NO_COLOR on a terminal: no ESC byte"; else fail "NO_COLOR on a terminal: no ESC byte"; fi
     cleanup
 else
-    echo "  SKIP: util-linux script not available"
+    echo "  SKIP: util-linux or BSD script not available"
 fi
 
 echo "Results: $PASS passed, $FAIL failed"

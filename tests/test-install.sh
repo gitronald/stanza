@@ -443,9 +443,8 @@ assert_eq "gate: CLICOLOR_FORCE=0 is not forcing" "off" "$(unset NO_COLOR; CLICO
 assert_eq "gate: not a terminal" "off" "$(unset NO_COLOR CLICOLOR_FORCE; TERM=xterm gate 1)"
 
 echo "Color under a terminal"
-if script --version 2> /dev/null | grep -q util-linux; then
-    # util-linux script(1) gives the command a pseudo-terminal
-    in_pty() { script -qec "$1" /dev/null 2>&1; }
+. "$STANZA_DIR/tests/pty.sh"
+if declare -f in_pty > /dev/null; then
     setup
     out=$(in_pty "env -u NO_COLOR TERM=xterm '$INSTALLER' --yes")
     assert_eq "terminal: colored" "yes" "$(esc_state "$out")"
@@ -456,7 +455,7 @@ if script --version 2> /dev/null | grep -q util-linux; then
     out=$(in_pty "env -u NO_COLOR TERM=dumb '$INSTALLER' --yes")
     assert_eq "terminal, TERM=dumb: no ESC byte" "no" "$(esc_state "$out")"
 else
-    echo "  SKIP: util-linux script not available"
+    echo "  SKIP: util-linux or BSD script not available"
 fi
 
 echo "Helpers match lib/stanza-common"
