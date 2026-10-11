@@ -45,7 +45,11 @@ LOG=$(mktemp)
 trap 'rm -rf "$SHIM" "$LOG"' EXIT
 ln -s "$BASH" "$SHIM/bash"
 PATH="$SHIM:$PATH"
-export PATH
+# Run as on a fresh CI machine: no global or system git config, so no test
+# leans on this machine's identity, hooks path, or default branch
+GIT_CONFIG_GLOBAL=/dev/null
+GIT_CONFIG_NOSYSTEM=1
+export PATH GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
 
 echo "bash $BASH_VERSION ($BASH)"
 passed=0
