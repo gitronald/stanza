@@ -5,7 +5,7 @@ status: active
 branch: feature/resume-earlier-release-steps
 created: 2026-10-09T23:02:03-07:00
 concluded:
-pr:
+pr: https://github.com/gitronald/stanza/pull/18
 ---
 
 # Resume a release that stopped before its tag
@@ -68,3 +68,4 @@ then `release pr` re-run; a `--local --no-dev-cycle` release, then a remote
   - Base: `dev` at `7966f2c`
   - Worktree: `.worktrees/resume-earlier-release-steps`
   - PR: pending
+- **2026-10-11T00:36:56-07:00** — PR opened: https://github.com/gitronald/stanza/pull/18
