@@ -2,6 +2,7 @@
 
 | # | Plan | Status | Concluded | PR |
 |---|---|---|---|---|
+| 012 | [Bound remote calls whose connection never opens](plans/012-bound-remote-calls/plan.md) | draft | — | — |
 | 006 | [Research porting stanza to a Python uv tool](plans/006-python-uv-port/plan.md) | draft | — | — |
 | 005 | [Add CI with an output-mode matrix and a bash 3.2 job](plans/005-ci-output-contract/plan.md) | done | 2026-10-11 04:41 PT | [#20](https://github.com/gitronald/stanza/pull/20) |
 | 007 | [Resume a release that stopped before its tag](plans/007-resume-earlier-release-steps/plan.md) | done | 2026-10-11 01:10 PT | [#18](https://github.com/gitronald/stanza/pull/18) |
