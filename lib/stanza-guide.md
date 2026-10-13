@@ -216,8 +216,19 @@ Git calls that reach the remote give up after `STANZA_NET_STALL_SECONDS`
 A remote that sends nothing while it works counts as stalled too (git's
 keepalives are far below the limit), so raise it for a slow server-side hook.
 Set it to `0` to turn this off. Your own `http.lowSpeedLimit`/`http.lowSpeedTime`
-git config wins. For SSH remotes, stanza adds `ServerAlive` keepalives unless
-you set `core.sshCommand`, `GIT_SSH`, or `GIT_SSH_COMMAND` yourself.
+git config wins. For SSH remotes, stanza adds `ServerAlive` keepalives and a
+`ConnectTimeout` of the same window unless you set `core.sshCommand`,
+`GIT_SSH`, or `GIT_SSH_COMMAND` yourself.
+
+Neither catches an HTTPS connection that never opens, which git would wait on
+for curl's five minutes. So every git and gh call that reaches the remote also
+ends after `STANZA_NET_TIMEOUT` seconds (default 120; `0` for no limit). A read
+(a fetch, `ls-remote`, a gh view or list) that hits it is tried once more. A
+write is not: a push or a PR create or merge can land before it is cut off.
+After one fails that way, stanza reads the remote and reports what landed,
+`pushed`, `not pushed`, or `unknown` (the remote could not be read either), and
+its hint follows: the retry for a push that did not land, the resume command
+for one that did.
 
 ## Attaching a note to the PR
 

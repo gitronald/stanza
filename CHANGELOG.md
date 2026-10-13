@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-13
+
+### Added
+
+- `STANZA_NET_TIMEOUT` (seconds, default 120; `0` for no limit) bounds every
+  git and gh call that reaches the remote, so a connection that never opens
+  costs two minutes at most instead of curl's five, and gh calls can no longer
+  wait forever. A read that hits the bound is tried once more before it is
+  reported.
+- SSH remotes get a `ConnectTimeout` of `STANZA_NET_STALL_SECONDS` beside the
+  keepalives, unless you chose your own ssh command.
+
+### Changed
+
+- When a push fails, stanza reads the remote and says
+  whether it landed (`pushed`, `not pushed`, or `unknown`) instead of stating
+  that nothing was pushed, and the retry or resume hint follows the answer. A
+  failed `gh pr create` or `gh pr merge` is checked the same way, and an
+  interactive prerelease push that landed counts as pushed.
+
 ## [1.4.1] - 2026-10-11
 
 ### Added
