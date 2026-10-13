@@ -231,7 +231,7 @@ Before it changes anything, a release checks what its phase needs: the branch, a
 
 The merge waits for CI: the release PR's checks, or with `--no-pr` the workflow runs on `dev`'s head. A failed or cancelled check stops the release before the merge, with the PR left open; fix it on `dev`, push, and run `stanza release merge`. A repository with no checks releases as before. A release also refuses to bump a `dev` whose head already failed CI. `STANZA_CHECKS_TIMEOUT` (seconds, default 1800; `0` for no limit) bounds the wait, and `--skip-checks` bypasses it.
 
-Git calls that reach the remote give up when a transfer stays below 1000 bytes/s for `STANZA_NET_STALL_SECONDS` (default 30). Raise it for a remote that can stay silent longer while it works (a slow server-side hook); set it to `0` to turn this off. Your own `http.lowSpeed*` git config wins.
+Git calls that reach the remote give up when a transfer stays below 1000 bytes/s for `STANZA_NET_STALL_SECONDS` (default 30). Raise it for a remote that can stay silent longer while it works (a slow server-side hook); set it to `0` to turn this off. Your own `http.lowSpeed*` git config wins. Every git and gh call that reaches the remote also ends after `STANZA_NET_TIMEOUT` seconds (default 120; `0` for no limit), which catches a connection that never opens; a read that hits it is tried once more. When a push or a PR step fails that way, stanza checks the remote and says whether it landed (`pushed`, `not pushed`, or `unknown`) before suggesting a retry or the resume command.
 
 ### Release Command
 
