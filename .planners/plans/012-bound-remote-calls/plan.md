@@ -1,7 +1,7 @@
 ---
 id: 12
 slug: bound-remote-calls
-status: active
+status: implemented
 branch: feature/bound-remote-calls
 created: 2026-10-12T12:51:46-07:00
 concluded:
@@ -117,3 +117,4 @@ push failure output.
   - Worktree: `.worktrees/bound-remote-calls`
   - PR: pending
 - **2026-10-13T10:28:54-07:00** — PR opened: https://github.com/gitronald/stanza/pull/22
+- **2026-10-13T10:43:41-07:00** — Implemented: 7 commits ahead of `dev`.
