@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Test git_net's stall bounds and the captured output of failed quiet calls
+# Test git_net's stall bounds, run_bounded and the remote-call bound, and the
+# captured output of failed quiet calls
 set -e
 
 STANZA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
@@ -152,6 +153,108 @@ test_ssh_receives_keepalive() {
     args=$(cat ssh.args 2>/dev/null)
     assert_contains "ssh got ServerAliveInterval" "$args" "ServerAliveInterval=15"
     assert_contains "ssh got ServerAliveCountMax" "$args" "ServerAliveCountMax=2"
+    assert_contains "ssh got ConnectTimeout" "$args" "ConnectTimeout=30"
+    cleanup
+}
+
+# Milliseconds since the epoch, from uv's python (date +%N is not on macOS).
+now_ms() {
+    uv run --no-project python -c 'import time; print(int(time.time() * 1000))'
+}
+
+test_run_bounded() {
+    echo ""
+    echo "run_bounded ends a command at the bound and returns 124"
+    local out code start elapsed
+    start=$(now_ms)
+    code=0
+    out=$(run_bounded 1 bash -c 'sleep 30; echo late' 2>&1) || code=$?
+    elapsed=$(( $(now_ms) - start ))
+    assert_eq "a command past the bound returns 124" "124" "$code"
+    assert_eq "its output stops at the bound" "" "$out"
+    assert_eq "returns within a second of the bound (${elapsed}ms)" "yes" \
+        "$([[ $elapsed -lt 2000 ]] && echo yes || echo no)"
+
+    # A grandchild that outlives its parent must not hold a captured pipe open.
+    start=$(now_ms)
+    code=0
+    out=$(run_bounded 1 bash -c 'bash -c "sleep 30" & wait' 2>&1) || code=$?
+    elapsed=$(( $(now_ms) - start ))
+    assert_eq "a process tree past the bound returns 124" "124" "$code"
+    assert_eq "the whole tree ends with it (${elapsed}ms)" "yes" \
+        "$([[ $elapsed -lt 2000 ]] && echo yes || echo no)"
+
+    code=0
+    out=$(run_bounded 5 bash -c 'echo done; echo oops >&2; exit 3' 2>&1) || code=$?
+    assert_eq "a command that finishes first keeps its status" "3" "$code"
+    assert_eq "and its output" $'done\noops' "$out"
+
+    out=$(printf 'piped\n' | run_bounded 5 cat)
+    assert_eq "stdin reaches the command" "piped" "$out"
+
+    code=0
+    out=$(run_bounded 0 bash -c 'sleep 2; echo finished') || code=$?
+    assert_eq "a bound of 0 does not end a long command" "0:finished" "$code:$out"
+
+    # A shell function runs under the bound as a command does.
+    slow_function() { sleep 30; }
+    code=0
+    run_bounded 1 slow_function || code=$?
+    assert_eq "a function past the bound returns 124" "124" "$code"
+    unset -f slow_function
+}
+
+test_read_retried_once() {
+    echo ""
+    echo "A read that ends on STANZA_NET_TIMEOUT is tried once more; a write is not"
+    setup_repo
+    local calls="$TEST_TMPDIR/calls" err code
+    # A gh stand-in: its first call hangs, later calls answer.
+    gh() {
+        echo x >> "$calls"
+        [[ $(wc -l < "$calls") -gt 1 ]] || sleep 30
+        echo answered
+    }
+    code=0
+    err=$(STANZA_NET_TIMEOUT=1 NO_COLOR=1 gh_net pr view 1 2>&1) || code=$?
+    assert_eq "the retried read succeeds" "0" "$code"
+    assert_contains "says it tried again" "$err" "[WARNING] gh pr view 1 timed out after 1s; trying once more"
+    assert_contains "keeps the second answer" "$err" "answered"
+
+    : > "$calls"
+    code=0
+    err=$(STANZA_NET_TIMEOUT=1 NO_COLOR=1 gh_quiet pr merge 1 2>&1) || code=$?
+    assert_eq "a write that ends on the bound returns 124" "124" "$code"
+    assert_eq "and is not tried again" "1" "$(wc -l < "$calls" | tr -d ' ')"
+    assert_contains "names the timeout" "$err" \
+        "[ERROR] gh pr merge 1 timed out after 1s (STANZA_NET_TIMEOUT)"
+
+    : > "$calls"
+    code=0
+    (STANZA_NET_TIMEOUT=1 NET_READ_RETRY=false gh_net pr list >/dev/null 2>&1) || code=$?
+    assert_eq "NET_READ_RETRY=false reads once" "124:1" "$code:$(wc -l < "$calls" | tr -d ' ')"
+    unset -f gh
+    cleanup
+}
+
+test_push_landed() {
+    echo ""
+    echo "push_landed compares origin's refs with the local ones"
+    setup_repo
+    git init -q --bare "$TEST_TMPDIR/remote.git"
+    git remote add origin "$TEST_TMPDIR/remote.git"
+    git -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
+    git branch -M main
+    git tag v1
+    assert_eq "nothing on origin" "not pushed" "$(push_landed main refs/tags/v1)"
+    git push -q origin main
+    assert_eq "one ref of two" "not pushed" "$(push_landed main refs/tags/v1)"
+    git push -q origin refs/tags/v1
+    assert_eq "both refs" "pushed" "$(push_landed main refs/tags/v1)"
+    git -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
+    assert_eq "origin behind the local branch" "not pushed" "$(push_landed main)"
+    git remote set-url origin "$TEST_TMPDIR/missing.git"
+    assert_eq "origin unreadable" "unknown" "$(push_landed main)"
     cleanup
 }
 
@@ -222,6 +325,9 @@ test_default_options
 test_stall_seconds_env
 test_user_config_wins
 test_ssh_receives_keepalive
+test_run_bounded
+test_read_retried_once
+test_push_landed
 test_quiet_failure_keeps_output
 test_verbose_failure_is_named
 test_quiet_try_warns
