@@ -1234,7 +1234,7 @@ test_tag_push_landed_then_hung() {
         "resume (opens the dev cycle): git checkout dev && stanza release merge -y"
     assert_not_contains "does not hint a retry" "$out" "retry:"
     assert_contains "names the failed step" "$out" \
-        "tag     failed; v0.1.0 is pushed with main, though the push reported a failure; dev is not advanced"
+        "tag     failed; v0.1.0 is on origin, though the push reported a failure; dev is not advanced"
     assert_eq "tag on the remote" "$(git rev-parse v0.1.0)" \
         "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse -q --verify refs/tags/v0.1.0)"
 
@@ -1263,6 +1263,41 @@ test_prerelease_push_landed_then_hung() {
     assert_contains "reports the push" "$out" "push    origin/dev"
     assert_eq "dev on the remote" "$(git rev-parse dev)" \
         "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse dev)"
+    teardown_remote_repo
+}
+
+test_unfinished_bump_tag_read_retried() {
+    echo ""
+    echo "A tag read tried again does not stop an unfinished bump from resuming"
+    setup_remote_repo
+    arm_step_failure push >/dev/null
+    local out code=0
+    out=$(NO_COLOR=1 "$STANZA" release pr patch -y 2>&1) || code=$?
+    assert_eq "pr exits 1" "1" "$code"
+    rm "$TEST_TMPDIR/remote.git/hooks/update"
+
+    # Every ls-remote of the tag hangs on its first try and answers on its second.
+    local real
+    real=$(command -v git)
+    cat > "$TEST_TMPDIR/bin/git" <<WRAP
+#!/bin/bash
+for a in "\$@"; do
+    if [[ "\$a" == refs/tags/v0.1.0 && " \$* " == *" ls-remote "* && ! -f "$TEST_TMPDIR/hung.\$PPID" ]]; then
+        touch "$TEST_TMPDIR/hung.\$PPID"
+        sleep 30
+    fi
+done
+exec "$real" "\$@"
+WRAP
+    chmod +x "$TEST_TMPDIR/bin/git"
+    code=0
+    out=$(STANZA_NET_TIMEOUT=2 NO_COLOR=1 "$STANZA" release pr patch -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_eq "a tag read hung once" "yes" \
+        "$(ls "$TEST_TMPDIR"/hung.* >/dev/null 2>&1 && echo yes || echo no)"
+    assert_contains "resume keeps the bump" "$out" "0.1.0 on dev, committed earlier"
+    assert_eq "one patch bump" "1" "$(patch_bumps)"
+    rm "$TEST_TMPDIR/bin/git"
     teardown_remote_repo
 }
 
@@ -2446,6 +2481,7 @@ test_stalled_fetch_stops_cycle
 test_tag_push_hang_not_pushed
 test_tag_push_landed_then_hung
 test_prerelease_push_landed_then_hung
+test_unfinished_bump_tag_read_retried
 test_gh_read_hangs_once
 test_gh_read_always_hangs
 test_gh_writes_landed_then_hung

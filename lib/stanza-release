@@ -150,7 +150,7 @@ release_failure_advice() {
                 FAILED_STATE="$base has the release merge; $tag is not tagged"
             else
                 case "$LANDED" in
-                    pushed)  FAILED_STATE="$tag is pushed with $base, though the push reported a failure; dev is not advanced" ;;
+                    pushed)  FAILED_STATE="$tag is on origin, though the push reported a failure; dev is not advanced" ;;
                     unknown) FAILED_STATE="$base has the release merge; whether $tag reached origin is unknown" ;;
                     *)       FAILED_STATE="$base has the release merge; $tag is not pushed" ;;
                 esac
@@ -324,7 +324,7 @@ release_push() {
 # Usage: report_failed_push <status> <what> <output>
 report_failed_push() {
     local status="$1" what="$2" out="$3" why="failed"
-    [[ "$status" -eq 124 ]] && why="timed out after $(env_seconds STANZA_NET_TIMEOUT 120)s (STANZA_NET_TIMEOUT)"
+    [[ "$status" -eq 124 ]] && why=$(net_timeout_reason)
     case "$LANDED" in
         pushed)  print_error "push of $what to origin $why, but origin has it" ;;
         unknown) print_error "push of $what to origin $why; could not read origin to tell whether it landed" ;;
@@ -1089,14 +1089,6 @@ CHECKS_RESULT=""
 # Why the checks step stopped (failed, timeout, or error), for the exit advice.
 CHECKS_STOP=""
 
-# A non-negative integer setting from the environment, or the default.
-# Usage: checks_seconds STANZA_CHECKS_TIMEOUT 1800
-checks_seconds() {
-    local value="${!1:-$2}"
-    [[ "$value" =~ ^[0-9]+$ ]] || value="$2"
-    echo $((10#$value))
-}
-
 # Read CI once into CI_LINES, one "<bucket>\t<name>" line per check, bucket
 # one of pass, fail, or pending. Returns 0, 2 when no checks are reported, and
 # 1 when gh fails (its output in CI_READ_ERROR). Sets globals, so call it
@@ -1186,9 +1178,9 @@ CHECKS_READ_ATTEMPTS=3
 wait_for_ci() {
     local kind="$1" ref="$2" what="$3"
     local timeout grace interval settle
-    timeout=$(checks_seconds STANZA_CHECKS_TIMEOUT 1800)
-    grace=$(checks_seconds STANZA_CHECKS_GRACE_SECONDS 15)
-    interval=$(checks_seconds STANZA_CHECKS_INTERVAL 10)
+    timeout=$(env_seconds STANZA_CHECKS_TIMEOUT 1800)
+    grace=$(env_seconds STANZA_CHECKS_GRACE_SECONDS 15)
+    interval=$(env_seconds STANZA_CHECKS_INTERVAL 10)
     settle=$(( interval < 3 ? interval : 3 ))
     local start=$SECONDS waited=false status elapsed pending total read_failures=0
     while true; do
@@ -1939,7 +1931,8 @@ find_unfinished_bump() {
             preflight_fail "could not read tag v$CURRENT_VERSION from origin" "" "$out"
             return 1
         fi
-        if [[ -n "$out" ]]; then
+        # Match the ref: the output can carry a warning (a read tried again).
+        if printf '%s\n' "$out" | awk -v ref="refs/tags/v$CURRENT_VERSION" '$2 == ref { found = 1 } END { exit !found }'; then
             BUMP_RESUMED_TYPE=""
             return 1
         fi
