@@ -801,18 +801,109 @@ should_skip_remote() {
 # STANZA_NET_STALL_SECONDS (default 30) aborts. A value the user configured wins:
 # http.lowSpeed* in git config is left alone, and GIT_HTTP_LOW_SPEED_LIMIT/_TIME
 # in the environment override any config. For SSH remotes it adds ServerAlive
-# keepalives through core.sshCommand, unless the user already chose an ssh
-# command (core.sshCommand, GIT_SSH, or GIT_SSH_COMMAND).
-# STANZA_NET_STALL_SECONDS=0 turns all of it off.
+# keepalives and a ConnectTimeout of the same window through core.sshCommand,
+# unless the user already chose an ssh command (core.sshCommand, GIT_SSH, or
+# GIT_SSH_COMMAND). STANZA_NET_STALL_SECONDS=0 turns all of it off.
+#
+# None of that bounds an HTTPS connection that never opens: curl checks the
+# low-speed limit only once the transfer is under way, and git offers no
+# connect timeout. So every remote call, git or gh, also runs under
+# run_bounded, which ends it after STANZA_NET_TIMEOUT seconds (default 120;
+# 0 for none). A read (fetch, ls-remote, a gh view or list) that ends on the
+# bound is tried once more; a write is not, since it may have landed (see
+# push_landed).
 #
 # Every git call that talks to a remote (fetch, pull, push, ls-remote) goes
-# through git_net, directly or through git_quiet.
+# through git_net, directly or through git_quiet, and every gh call that does
+# through gh_net, directly or through gh_quiet.
 STANZA_NET_STALL_BYTES=1000
 
+# A non-negative integer of seconds from the environment variable named, or
+# the default. A leading zero is decimal: 08 is eight seconds.
+# Usage: env_seconds STANZA_NET_TIMEOUT 120
+env_seconds() {
+    local value="${!1:-$2}"
+    [[ "$value" =~ ^[0-9]+$ ]] || value="$2"
+    echo $((10#$value))
+}
+
+# Run a command, ending it after the given seconds. Returns 124 when the bound
+# ended it, as GNU timeout does, and the command's own status otherwise; output
+# and stdin are the command's own. 0 seconds runs it unbounded. Built from
+# builtins (a background job and a sleeping watchdog), since macOS ships no
+# timeout command. The watchdog ends the whole process tree, so a helper git
+# started (git-remote-https, ssh) cannot hold a captured pipe open.
+# Usage: run_bounded <seconds> cmd [args...]
+run_bounded() {
+    local seconds="$1" pid watchdog status=0 fired=0
+    shift
+    if [[ "$seconds" -eq 0 ]]; then
+        "$@"
+        return
+    fi
+    # Without job control a background job reads /dev/null; keep stdin.
+    "$@" <&0 &
+    pid=$!
+    (
+        trap 'kill "$sleeper" 2>/dev/null; exit 1' TERM
+        sleep "$seconds" &
+        sleeper=$!
+        wait "$sleeper"
+        kill_tree "$pid"
+    ) </dev/null >/dev/null 2>&1 &
+    watchdog=$!
+    wait "$pid" 2>/dev/null || status=$?
+    kill -TERM "$watchdog" 2>/dev/null || true
+    # The watchdog exits 0 only when it slept the whole bound.
+    wait "$watchdog" 2>/dev/null || fired=$?
+    [[ $fired -ne 0 ]] || return 124
+    return "$status"
+}
+
+# Send TERM to a process and every descendant, then KILL to any still there a
+# second later. The tree is read before anything is signalled: a child whose
+# parent has died is no longer linked to it.
+kill_tree() {
+    local root="$1" pids pid
+    pids=$(ps -A -o pid= -o ppid= 2>/dev/null | awk -v root="$root" '
+        { parent[$1] = $2 }
+        END {
+            for (p in parent) {
+                q = p
+                while ((q in parent) && q != root && q > 1) q = parent[q]
+                if (q == root) print p
+            }
+        }')
+    [[ -n "$pids" ]] || pids="$root"
+    # shellcheck disable=SC2086  # one pid per word
+    kill -TERM $pids 2>/dev/null || return 0
+    sleep 1
+    for pid in $pids; do
+        kill -KILL "$pid" 2>/dev/null || true
+    done
+}
+
+# Run a remote call under STANZA_NET_TIMEOUT. A read that ends on the bound
+# is tried once more, unless the caller sets NET_READ_RETRY=false (a check
+# after a failed write, which should not double the wait); LABEL names the call
+# in the warning that says so.
+# Usage: net_bounded read|write <label> cmd [args...]
+net_bounded() {
+    local kind="$1" label="$2" seconds status=0
+    shift 2
+    seconds=$(env_seconds STANZA_NET_TIMEOUT 120)
+    run_bounded "$seconds" "$@" || status=$?
+    if [[ $status -eq 124 && "$kind" == "read" && "${NET_READ_RETRY:-true}" == "true" ]]; then
+        print_warning "$label timed out after ${seconds}s; trying once more"
+        status=0
+        run_bounded "$seconds" "$@" || status=$?
+    fi
+    return "$status"
+}
+
 git_net() {
-    local stall="${STANZA_NET_STALL_SECONDS:-30}"
-    [[ "$stall" =~ ^[0-9]+$ ]] || stall=30
-    stall=$((10#$stall))  # 08 is eight seconds, not an octal error
+    local stall
+    stall=$(env_seconds STANZA_NET_STALL_SECONDS 30)
     local opts=()
     if [[ "$stall" -gt 0 ]]; then
         git config --get http.lowSpeedLimit >/dev/null 2>&1 \
@@ -821,10 +912,48 @@ git_net() {
             || opts+=(-c "http.lowSpeedTime=$stall")
         if [[ -z "${GIT_SSH_COMMAND:-}" && -z "${GIT_SSH:-}" ]] \
             && ! git config --get core.sshCommand >/dev/null 2>&1; then
-            opts+=(-c "core.sshCommand=ssh -o ServerAliveInterval=$(( (stall + 1) / 2 )) -o ServerAliveCountMax=2")
+            opts+=(-c "core.sshCommand=ssh -o ConnectTimeout=$stall -o ServerAliveInterval=$(( (stall + 1) / 2 )) -o ServerAliveCountMax=2")
         fi
     fi
-    git "${opts[@]}" "$@"
+    local kind="write"
+    case "${1:-}" in
+        fetch|ls-remote) kind="read" ;;
+    esac
+    net_bounded "$kind" "$(command_label git "$@")" git "${opts[@]}" "$@"
+}
+
+# Run gh under STANZA_NET_TIMEOUT, trying a read once more (see net_bounded).
+# Usage: gh_net pr view "$PR_NUMBER" --json url --jq .url
+gh_net() {
+    local kind="write"
+    case "${2:-}" in
+        view|list|checks|status) kind="read" ;;
+    esac
+    net_bounded "$kind" "$(command_label gh "$@")" gh "$@"
+}
+
+# After a push that failed, read origin's refs to say whether it landed: prints
+# "pushed" when origin has every ref at the local value, "not pushed" when it
+# does not, and "unknown" when origin cannot be read. A bound can end a push
+# after the remote took the refs, so a failed push is not proof that nothing
+# was pushed. A bare branch name is taken as refs/heads/<name>.
+# Usage: push_landed <ref>...
+push_landed() {
+    local refs=() ref out local_sha remote_sha NET_READ_RETRY=false
+    for ref in "$@"; do
+        [[ "$ref" == refs/* ]] || ref="refs/heads/$ref"
+        refs+=("$ref")
+    done
+    out=$(git_net ls-remote origin "${refs[@]}" 2>/dev/null) || { echo "unknown"; return 0; }
+    for ref in "${refs[@]}"; do
+        local_sha=$(git rev-parse -q --verify "$ref" 2>/dev/null) || local_sha=""
+        remote_sha=$(printf '%s\n' "$out" | awk -v ref="$ref" '$2 == ref { print $1 }')
+        if [[ -z "$local_sha" || "$local_sha" != "$remote_sha" ]]; then
+            echo "not pushed"
+            return 0
+        fi
+    done
+    echo "pushed"
 }
 
 # Run git with output control based on verbose flag. Remote subcommands go
@@ -837,10 +966,11 @@ git_quiet() {
     esac
 }
 
-# Run gh with output control based on verbose flag (see quiet_run).
+# Run gh with output control based on verbose flag (see quiet_run), under the
+# remote-call bound (gh_net).
 # Usage: gh_quiet pr merge "$PR_NUMBER" --merge
 gh_quiet() {
-    quiet_run gh "$@"
+    quiet_run gh_net "$@"
 }
 
 # Run a command with its output hidden unless VERBOSE (-vv). When it fails,
@@ -878,7 +1008,11 @@ run_reported() {
     fi
     [[ $status -ne 0 ]] || return 0
     local message
-    message="$(command_label "$@") failed (exit $status)"
+    if [[ $status -eq 124 && ( "$1" == git_net || "$1" == gh_net ) ]]; then
+        message="$(command_label "$@") timed out after $(env_seconds STANZA_NET_TIMEOUT 120)s (STANZA_NET_TIMEOUT)"
+    else
+        message="$(command_label "$@") failed (exit $status)"
+    fi
     if [[ "$level" == "warning" ]]; then
         # Warnings are silent under --json (see print_warning); so is the output.
         [[ "$JSON_OUTPUT" != "true" ]] || return $status
@@ -890,12 +1024,13 @@ run_reported() {
     return $status
 }
 
-# A command as a one-line label for error messages: git_net shows as git,
-# arguments with spaces are quoted, newlines are flattened, and the result is
-# cut at 100 characters.
+# A command as a one-line label for error messages: git_net shows as git and
+# gh_net as gh, arguments with spaces are quoted, newlines are flattened, and
+# the result is cut at 100 characters.
 command_label() {
     local label="$1" arg
     [[ "$label" == "git_net" ]] && label="git"
+    [[ "$label" == "gh_net" ]] && label="gh"
     shift
     for arg in "$@"; do
         arg="${arg//$'\n'/ }"
