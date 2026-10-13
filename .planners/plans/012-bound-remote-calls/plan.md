@@ -1,10 +1,10 @@
 ---
 id: 12
 slug: bound-remote-calls
-status: implemented
+status: done
 branch: feature/bound-remote-calls
 created: 2026-10-12T12:51:46-07:00
-concluded:
+concluded: 2026-10-13T10:51:18-07:00
 pr: https://github.com/gitronald/stanza/pull/22
 ---
 
@@ -122,3 +122,11 @@ push failure output.
   - Watchdog fix during implementation: a TERM from the caller during kill_tree's KILL follow-up hid that the bound fired (143, not 124); the watchdog now ignores TERM once fired and the KILL follow-up runs in the background.
   - Review follow-up (medium, posted on PR #22): raised 4 confirmed, 3 plausible, 1 rejected. Actioned: find_unfinished_bump matched any captured ls-remote output, so a retry warning blocked a resume; now matches the ref (test_unfinished_bump_tag_read_retried, fails without the fix). Merged checks_seconds into env_seconds; net_timeout/net_timeout_reason replace three copies of the default; tag advice no longer says the base was pushed with a tag-only push (existing test updated); watchdog trap kills $(jobs -p) to close a TERM race (not deterministically testable). Conscious no-ops: the parallel hint blocks in git_tag_version and resume_shipped_release, and pid reuse in the delayed KILL. Rejected: push_landed after a fast rejection is intended.
   - Commit c16569e uses net_timeout_reason, defined in the next commit b6054af; the tip is consistent, history left as pushed.
+
+## Retrospective
+
+- The plan held up: all five changes shipped as specified. Two choices it left open were settled in code: the SSH `ConnectTimeout` uses the stall window (so it holds when `STANZA_NET_TIMEOUT=0`), and a landed `gh pr create`/`merge` stops the run with a resume hint rather than continuing, matching how pushes behave.
+- Killing only the direct child is not enough: an orphaned `git-remote-https` holds a `$(...)` pipe open until its own timeout. Walking the process tree from `ps` and signalling it as a whole is what made the bound real.
+- Adding output to a read (the retry warning) is a contract change for every caller that captures `2>&1` and tests the result. The review caught the one caller that tested emptiness; parse for the expected ref, never "is there any output".
+- Watchdog status is subtle: the caller's TERM can land after the bound fired. Deciding "fired" by the watchdog's exit status works only if the watchdog ignores TERM once it has fired.
+- Next time, run each commit's checks before committing a fix that spans two files, so no intermediate commit references a helper defined later.
