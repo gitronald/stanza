@@ -97,7 +97,7 @@ release_failure_advice() {
                 esac
             else
                 case "$LANDED" in
-                    opened)  FAILED_STATE="$tag is pushed to dev; PR #$RELEASE_PR_NUMBER is open, though gh pr create reported a failure" ;;
+                    opened)  FAILED_STATE="$tag is pushed to dev; PR #$RELEASE_PR_NUMBER is open; nothing is merged" ;;
                     unknown) FAILED_STATE="$tag is pushed to dev; whether the PR was opened is unknown" ;;
                     *)       FAILED_STATE="$tag is pushed to dev; nothing is merged" ;;
                 esac
@@ -1355,7 +1355,11 @@ gh_create_pr() {
         print_error "No open pull requests from dev to $BASE_BRANCH found"
         exit 1
     fi
-    RELEASE_PR_URL=$(gh_net pr view "$RELEASE_PR_NUMBER" --json url --jq '.url')
+    if ! RELEASE_PR_URL=$(gh_net pr view "$RELEASE_PR_NUMBER" --json url --jq '.url'); then
+        LANDED="opened"
+        print_error "could not read PR #$RELEASE_PR_NUMBER from GitHub"
+        exit 1
+    fi
 
     # Append the note to the PR body, if one was given. --fill already set a
     # commit-derived body; we read it back and append rather than pass --body

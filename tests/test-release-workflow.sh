@@ -129,7 +129,10 @@ STANZA="$STANZA_DIR/bin/stanza"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
 # Write a gh mock that records a single PR in $GH_MOCK_STATE and performs a
-# real local merge (against the bare remote) on `gh pr merge`.
+# real local merge (against the bare remote) on `gh pr merge`. A create_hang or
+# merge_hang file makes `gh pr create` or `gh pr merge` hang after it has done
+# its work, as a call the remote-call bound ends after it landed; view_hang
+# hangs `gh pr view --json url` (see the url case).
 #
 # CI is scripted per call: the Nth `gh pr checks` prints $GH_MOCK_STATE/checks.N
 # (or the highest-numbered file once the calls run past it), already in the
@@ -191,6 +194,7 @@ case "$cmd" in
         echo "https://example.test/pull/1" > "$STATE/url"
         printf 'filled body' > "$STATE/body"
         git rev-parse dev > "$STATE/head"
+        [[ ! -f "$STATE/create_hang" ]] || sleep 30
         ;;
       list)
         jq=""; prev=""
@@ -212,7 +216,16 @@ case "$cmd" in
           esac
         done
         case "$field" in
-          url) cat "$STATE/url" ;;
+          url)
+            # view_hang: "once" hangs the first url read, "always" every one.
+            if [[ -f "$STATE/view_hang" ]] \
+                && { [[ "$(cat "$STATE/view_hang")" == always ]] || [[ ! -f "$STATE/view_hung" ]]; }; then
+              touch "$STATE/view_hung"
+              sleep 30
+            fi
+            cat "$STATE/url"
+            ;;
+          state) tr '[:lower:]' '[:upper:]' < "$STATE/state" ;;
           body) cat "$STATE/body" ;;
           title) cat "$STATE/title" ;;
           headRefOid) cat "$STATE/head" ;;
@@ -263,7 +276,8 @@ case "$cmd" in
           git merge -q --no-ff --no-edit dev
         fi
         git push -q origin main
-        echo closed > "$STATE/state"
+        echo merged > "$STATE/state"
+        [[ ! -f "$STATE/merge_hang" ]] || sleep 30
         ;;
       *) exit 0 ;;
     esac
@@ -351,6 +365,28 @@ PY
 remote_update_hook() {
     printf '#!/bin/bash\n%s\nexit 0\n' "$1" > "$TEST_TMPDIR/remote.git/hooks/update"
     chmod +x "$TEST_TMPDIR/remote.git/hooks/update"
+}
+
+# Put a git on PATH that hangs the push whose arguments include MARK (--atomic
+# for the release's tag push, push for any push). With mode land it pushes
+# first, as a push the remote took before the connection hung. Every other
+# call is git's own.
+# Usage: wrap_git_push hang|land <mark>
+wrap_git_push() {
+    local mode="$1" mark="$2" real
+    real=$(command -v git)
+    cat > "$TEST_TMPDIR/bin/git" <<WRAP
+#!/bin/bash
+for a in "\$@"; do
+    if [[ "\$a" == "$mark" ]]; then
+        [[ "$mode" != land ]] || "$real" "\$@"
+        sleep 30
+        exit 1
+    fi
+done
+exec "$real" "\$@"
+WRAP
+    chmod +x "$TEST_TMPDIR/bin/git"
 }
 
 # Arm a failure in one release step of a full 'release patch' over the gh mock,
@@ -556,7 +592,7 @@ test_remote_two_stage() {
     assert_eq "tag created after merge" "v0.1.0" "$(git tag -l v0.1.0)"
     assert_eq "back on dev after merge" "dev" "$(git branch --show-current)"
     assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
-    assert_eq "PR closed after merge" "closed" "$(cat "$GH_MOCK_STATE/state")"
+    assert_eq "PR merged" "merged" "$(cat "$GH_MOCK_STATE/state")"
     assert_contains "merge-phase JSON has phase" "$out" '"phase":"merge"'
     assert_eq "merge phase passes the release subject to gh" "version [release]: v0.1.0 - PR #1" \
         "$(cat "$GH_MOCK_STATE/merge_subject")"
@@ -1161,6 +1197,141 @@ HOOK
     assert_contains "back-merge carries the release" \
         "$(git log --format=%s dev)" "Merge branch 'main' into dev"
 
+    teardown_remote_repo
+}
+
+test_tag_push_hang_not_pushed() {
+    echo ""
+    echo "A tag push that hangs ends at STANZA_NET_TIMEOUT and reports not pushed"
+    setup_remote_repo
+    wrap_git_push hang --atomic
+    local out code=0 start elapsed
+    start=$(date +%s)
+    out=$(STANZA_NET_TIMEOUT=2 NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    elapsed=$(( $(date +%s) - start ))
+    assert_eq "exits 1" "1" "$code"
+    assert_eq "stops soon after the bound (${elapsed}s)" "yes" "$([[ $elapsed -lt 10 ]] && echo yes || echo no)"
+    assert_contains "says the push timed out and did not land" "$out" \
+        "push of main and tag v0.1.0 to origin timed out after 2s (STANZA_NET_TIMEOUT); nothing was pushed"
+    assert_contains "hints the retry" "$out" "retry: git push --atomic origin main refs/tags/v0.1.0"
+    assert_contains "names the failed step" "$out" "tag     failed; main has the release merge; v0.1.0 is not pushed"
+    assert_eq "no tag on the remote" "" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse -q --verify refs/tags/v0.1.0)"
+    teardown_remote_repo
+}
+
+test_tag_push_landed_then_hung() {
+    echo ""
+    echo "A tag push that lands and then hangs reports pushed, and resumes"
+    setup_remote_repo
+    wrap_git_push land --atomic
+    local out code=0
+    out=$(STANZA_NET_TIMEOUT=2 NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "exits 1" "1" "$code"
+    assert_contains "says origin has the push" "$out" \
+        "push of main and tag v0.1.0 to origin timed out after 2s (STANZA_NET_TIMEOUT), but origin has it"
+    assert_contains "hints the resume" "$out" \
+        "resume (opens the dev cycle): git checkout dev && stanza release merge -y"
+    assert_not_contains "does not hint a retry" "$out" "retry:"
+    assert_contains "names the failed step" "$out" \
+        "tag     failed; v0.1.0 is pushed with main, though the push reported a failure; dev is not advanced"
+    assert_eq "tag on the remote" "$(git rev-parse v0.1.0)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse -q --verify refs/tags/v0.1.0)"
+
+    rm "$TEST_TMPDIR/bin/git"
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "resume exits 0" "0" "$code"
+    assert_contains "resume finds the release" "$out" "v0.1.0  already released; resuming"
+    assert_eq "dev on next prerelease" "0.1.1a0" "$(cat VERSION)"
+    teardown_remote_repo
+}
+
+test_prerelease_push_landed_then_hung() {
+    echo ""
+    echo "A prerelease push that lands and then hangs counts as pushed"
+    setup_remote_repo
+    wrap_git_push land push
+    local out code=0
+    out=$(STANZA_NET_TIMEOUT=2 NO_COLOR=1 "$STANZA" release prerelease -y 2>&1) || code=$?
+    assert_eq "exits 0" "0" "$code"
+    assert_contains "warns that the push timed out" "$out" \
+        "[WARNING] git push origin dev timed out after 2s (STANZA_NET_TIMEOUT)"
+    assert_contains "says origin has it" "$out" \
+        "origin/dev has the commit; the push reported a failure after it landed"
+    assert_contains "reports the push" "$out" "push    origin/dev"
+    assert_eq "dev on the remote" "$(git rev-parse dev)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse dev)"
+    teardown_remote_repo
+}
+
+test_gh_read_hangs_once() {
+    echo ""
+    echo "A gh read that hangs once is tried again, and the release goes on"
+    setup_remote_repo
+    echo once > "$GH_MOCK_STATE/view_hang"
+    local out code=0
+    out=$(STANZA_NET_TIMEOUT=2 NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "exits 0" "0" "$code"
+    assert_contains "says it tried again" "$out" \
+        "[WARNING] gh pr view 1 --json url --jq .url timed out after 2s; trying once more"
+    assert_eq "tag on the remote" "$(git rev-parse v0.1.0)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse -q --verify refs/tags/v0.1.0)"
+    teardown_remote_repo
+}
+
+test_gh_read_always_hangs() {
+    echo ""
+    echo "A gh read that always hangs stops the release within twice the bound"
+    setup_remote_repo
+    echo always > "$GH_MOCK_STATE/view_hang"
+    local out code=0 start elapsed
+    start=$(date +%s)
+    out=$(STANZA_NET_TIMEOUT=2 NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    elapsed=$(( $(date +%s) - start ))
+    assert_eq "exits 1" "1" "$code"
+    assert_eq "stops soon after twice the bound (${elapsed}s)" "yes" \
+        "$([[ $elapsed -lt 10 ]] && echo yes || echo no)"
+    assert_contains "names the read" "$out" "[ERROR] could not read PR #1 from GitHub"
+    assert_contains "names the failed step" "$out" "pr      failed; v0.1.0 is pushed to dev; PR #1 is open; nothing is merged"
+    assert_contains "hints the resume" "$out" "resume: stanza release patch -y"
+    teardown_remote_repo
+}
+
+test_gh_writes_landed_then_hung() {
+    echo ""
+    echo "A gh pr create or merge that lands and then hangs says so"
+    setup_remote_repo
+    touch "$GH_MOCK_STATE/create_hang"
+    local out code=0
+    out=$(STANZA_NET_TIMEOUT=2 NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "create: exits 1" "1" "$code"
+    assert_contains "create: names the timeout" "$out" "timed out after 2s (STANZA_NET_TIMEOUT)"
+    assert_contains "create: finds the PR open" "$out" \
+        "pr      failed; v0.1.0 is pushed to dev; PR #1 is open; nothing is merged"
+    rm "$GH_MOCK_STATE/create_hang"
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "create: the same command resumes" "0" "$code"
+    assert_contains "create: resumes with the open PR" "$out" "(opened earlier)"
+    teardown_remote_repo
+
+    setup_remote_repo
+    touch "$GH_MOCK_STATE/merge_hang"
+    code=0
+    out=$(STANZA_NET_TIMEOUT=2 NO_COLOR=1 "$STANZA" release patch -y 2>&1) || code=$?
+    assert_eq "merge: exits 1" "1" "$code"
+    assert_contains "merge: finds the PR merged" "$out" \
+        "merge   failed; PR #1 is merged, though gh pr merge reported a failure; v0.1.0 is not tagged"
+    assert_contains "merge: hints the resume" "$out" "resume: git checkout dev && stanza release merge -y"
+    rm "$GH_MOCK_STATE/merge_hang"
+    git checkout -q dev
+    code=0
+    out=$(NO_COLOR=1 "$STANZA" release merge -y 2>&1) || code=$?
+    assert_eq "merge: resume exits 0" "0" "$code"
+    assert_eq "merge: tag on the remote" "$(git rev-parse v0.1.0)" \
+        "$(git --git-dir="$TEST_TMPDIR/remote.git" rev-parse -q --verify refs/tags/v0.1.0)"
     teardown_remote_repo
 }
 
@@ -2272,6 +2443,12 @@ test_resume_tag_fetch_failure_stops
 test_subshell_error_reaches_json
 test_prerelease_push_failure_warns
 test_stalled_fetch_stops_cycle
+test_tag_push_hang_not_pushed
+test_tag_push_landed_then_hung
+test_prerelease_push_landed_then_hung
+test_gh_read_hangs_once
+test_gh_read_always_hangs
+test_gh_writes_landed_then_hung
 test_local_cycle_resume
 test_local_release_finished_remotely
 test_merged_release_resumes_tag
