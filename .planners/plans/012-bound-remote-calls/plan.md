@@ -1,8 +1,8 @@
 ---
 id: 12
 slug: bound-remote-calls
-status: draft
-branch:
+status: active
+branch: feature/bound-remote-calls
 created: 2026-10-12T12:51:46-07:00
 concluded:
 pr:
@@ -108,3 +108,11 @@ push failure output.
 
 - A connect timeout for HTTPS itself: git offers no option for it.
 - The checks wait, which `STANZA_CHECKS_TIMEOUT` already bounds.
+
+## Log
+
+- **2026-10-13T10:20:34-07:00** — Activated.
+  - Branch: `feature/bound-remote-calls`
+  - Base: `dev` at `7d9ceaa`
+  - Worktree: `.worktrees/bound-remote-calls`
+  - PR: pending
