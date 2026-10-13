@@ -92,7 +92,7 @@ test_default_options() {
     assert_contains "low speed limit" "$opts" "http.lowSpeedLimit=1000"
     assert_contains "low speed time" "$opts" "http.lowSpeedTime=30"
     assert_contains "ssh keepalive" "$opts" \
-        "core.sshCommand=ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
+        "core.sshCommand=ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
     cleanup
 }
 
