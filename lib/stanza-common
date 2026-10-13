@@ -849,6 +849,8 @@ run_bounded() {
         sleep "$seconds" &
         sleeper=$!
         wait "$sleeper"
+        # Fired: a TERM from the caller now must not hide that it did.
+        trap '' TERM
         kill_tree "$pid"
     ) </dev/null >/dev/null 2>&1 &
     watchdog=$!
@@ -860,11 +862,11 @@ run_bounded() {
     return "$status"
 }
 
-# Send TERM to a process and every descendant, then KILL to any still there a
-# second later. The tree is read before anything is signalled: a child whose
-# parent has died is no longer linked to it.
+# Send TERM to a process and every descendant, and KILL a second later in the
+# background, for one that ignores TERM. The tree is read before anything is
+# signalled: a child whose parent has died is no longer linked to it.
 kill_tree() {
-    local root="$1" pids pid
+    local root="$1" pids
     pids=$(ps -A -o pid= -o ppid= 2>/dev/null | awk -v root="$root" '
         { parent[$1] = $2 }
         END {
@@ -876,11 +878,9 @@ kill_tree() {
         }')
     [[ -n "$pids" ]] || pids="$root"
     # shellcheck disable=SC2086  # one pid per word
-    kill -TERM $pids 2>/dev/null || return 0
-    sleep 1
-    for pid in $pids; do
-        kill -KILL "$pid" 2>/dev/null || true
-    done
+    kill -TERM $pids 2>/dev/null || true
+    # shellcheck disable=SC2086
+    ( sleep 1; kill -KILL $pids 2>/dev/null ) </dev/null >/dev/null 2>&1 &
 }
 
 # Run a remote call under STANZA_NET_TIMEOUT. A read that ends on the bound
