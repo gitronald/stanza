@@ -845,10 +845,10 @@ run_bounded() {
     "$@" <&0 &
     pid=$!
     (
-        trap 'kill "$sleeper" 2>/dev/null; exit 1' TERM
+        # jobs -p, not $!: a TERM can land before $! is read.
+        trap 'kill $(jobs -p) 2>/dev/null; exit 1' TERM
         sleep "$seconds" &
-        sleeper=$!
-        wait "$sleeper"
+        wait $!
         # Fired: a TERM from the caller now must not hide that it did.
         trap '' TERM
         kill_tree "$pid"
@@ -883,6 +883,16 @@ kill_tree() {
     ( sleep 1; kill -KILL $pids 2>/dev/null ) </dev/null >/dev/null 2>&1 &
 }
 
+# The remote-call bound in seconds: STANZA_NET_TIMEOUT, default 120, 0 for none.
+net_timeout() {
+    env_seconds STANZA_NET_TIMEOUT 120
+}
+
+# How a remote call that ended on the bound is described in an error.
+net_timeout_reason() {
+    echo "timed out after $(net_timeout)s (STANZA_NET_TIMEOUT)"
+}
+
 # Run a remote call under STANZA_NET_TIMEOUT. A read that ends on the bound
 # is tried once more, unless the caller sets NET_READ_RETRY=false (a check
 # after a failed write, which should not double the wait); LABEL names the call
@@ -891,7 +901,7 @@ kill_tree() {
 net_bounded() {
     local kind="$1" label="$2" seconds status=0
     shift 2
-    seconds=$(env_seconds STANZA_NET_TIMEOUT 120)
+    seconds=$(net_timeout)
     run_bounded "$seconds" "$@" || status=$?
     if [[ $status -eq 124 && "$kind" == "read" && "${NET_READ_RETRY:-true}" == "true" ]]; then
         print_warning "$label timed out after ${seconds}s; trying once more"
@@ -1009,7 +1019,7 @@ run_reported() {
     [[ $status -ne 0 ]] || return 0
     local message
     if [[ $status -eq 124 && ( "$1" == git_net || "$1" == gh_net ) ]]; then
-        message="$(command_label "$@") timed out after $(env_seconds STANZA_NET_TIMEOUT 120)s (STANZA_NET_TIMEOUT)"
+        message="$(command_label "$@") $(net_timeout_reason)"
     else
         message="$(command_label "$@") failed (exit $status)"
     fi
